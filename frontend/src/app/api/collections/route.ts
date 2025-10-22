@@ -34,6 +34,14 @@ export async function GET(request: NextRequest) {
     }
 
     const data = await response.json();
+
+    // Cloudian logic to hide the reserved collections
+    const collectionsToBeHidden = ["meta", "metadata_schema"];
+    data.collections = data.collections.filter(
+      collection => !collectionsToBeHidden.includes(collection.collection_name)
+    );
+    data.total_collections = data.collections.length;
+
     return NextResponse.json(data);
   } catch (error) {
     console.error("Error fetching collections:", error);
