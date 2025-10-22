@@ -423,6 +423,7 @@ export default function Collections() {
         {renderContent()}
       </div>
 
+{/*
       <div className="mt-auto flex gap-2">
         <button
           className="flex w-full items-center justify-center gap-2 rounded-full border border-[var(--nv-green)] bg-black px-4 py-2 font-medium text-white transition-colors hover:bg-[#1A1A1A] disabled:cursor-not-allowed disabled:opacity-50"
@@ -461,6 +462,7 @@ export default function Collections() {
           onDocumentsUpdate={fetchDocuments}
         />
       </div>
+ */}
     </div>
   );
 }

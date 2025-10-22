@@ -27,12 +27,12 @@ export default function Header({ onToggleSidebar, activePanel }: HeaderProps) {
     <div className="flex h-14 items-center justify-between border-b border-neutral-800 bg-black px-4">
       <div className="flex items-center gap-2">
         <Image
-          src="/nvidia-logo.svg"
-          alt="NVIDIA Logo"
+          src="/cloudian-logo.png"
+          alt="Cloudian Logo"
           width={128}
           height={24}
         />
-        <span className="text-lg font-semibold text-white">RAG Blueprint</span>
+        <span className="text-lg font-semibold text-white">RAG</span>
       </div>
 
       <div className="absolute left-1/2 -translate-x-1/2 transform"></div>
