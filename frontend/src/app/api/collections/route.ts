@@ -18,6 +18,7 @@ import {
   createErrorResponse,
 } from "../utils/api-utils";
 import { API_CONFIG, buildQueryUrl } from "@/app/config/api";
+import { Collection } from "@/types/collections";
 
 // GET /collections
 export async function GET(request: NextRequest) {
@@ -38,7 +39,7 @@ export async function GET(request: NextRequest) {
     // Cloudian logic to hide the reserved collections
     const collectionsToBeHidden = ["meta", "metadata_schema"];
     data.collections = data.collections.filter(
-      collection => !collectionsToBeHidden.includes(collection.collection_name)
+      (collection: Collection) => !collectionsToBeHidden.includes(collection.collection_name)
     );
     data.total_collections = data.collections.length;
 
