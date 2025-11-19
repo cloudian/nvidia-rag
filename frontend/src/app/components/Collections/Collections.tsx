@@ -138,6 +138,9 @@ export default function Collections() {
 
   // Event Handlers
   const handleDeleteCollection = async (name: string) => {
+    console.log("handleDeleteCollection is not supported");
+    return;
+
     try {
       const response = await fetch("/api/collections", {
         method: "DELETE",
@@ -159,6 +162,9 @@ export default function Collections() {
   };
 
   const handleDeleteDocument = async (documentName: string) => {
+    console.log("handleDeleteCollection is not supported");
+    return;
+
     if (!selectedCollection) return;
 
     try {
