@@ -26,10 +26,10 @@ interface SourceItemProps {
 }
 
 function SourceItem({ name, metadata, metadataSchema = [], onDelete }: SourceItemProps) {
-  // const handleDelete = (e: React.MouseEvent) => {
-  //   e.stopPropagation();
-  //   onDelete();
-  // };
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDelete();
+  };
 
   const shouldShowField = (key: string, value: string | null | undefined) => {
     if (value == null) return false;
@@ -58,7 +58,7 @@ function SourceItem({ name, metadata, metadataSchema = [], onDelete }: SourceIte
             {name}
           </span>
         </div>
-        {/* <button
+        <button
           onClick={handleDelete}
           className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-red-500 hover:bg-neutral-800"
         >
@@ -77,7 +77,7 @@ function SourceItem({ name, metadata, metadataSchema = [], onDelete }: SourceIte
             <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
             <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
           </svg>
-        </button> */}
+        </button>
       </div>
 
       {metadata && (

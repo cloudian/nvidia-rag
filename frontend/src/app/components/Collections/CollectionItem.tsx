@@ -261,7 +261,7 @@ function CollectionItem({
                 View Processing Status
               </button>
             )}
-            {/* <button onClick={handleDelete} className="flex w-full items-center px-4 py-2 text-sm text-red-500 hover:bg-neutral-800">Delete Collection</button> */}
+            <button onClick={handleDelete} className="flex w-full items-center px-4 py-2 text-sm text-red-500 hover:bg-neutral-800">Delete Collection</button>
           </div>
         </div>
       )}
