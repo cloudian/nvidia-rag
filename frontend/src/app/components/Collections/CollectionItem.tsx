@@ -249,7 +249,7 @@ function CollectionItem({
       {isDropdownOpen && (
         <div className="dropdown-container fixed z-50 w-48" style={{ top: `${dropdownPosition.top}px`, right: `${dropdownPosition.right}px` }}>
           <div className="rounded-md border border-neutral-800 bg-neutral-900 shadow-lg">
-            <button onClick={handleAddSource} className="flex w-full items-center px-4 py-2 text-sm text-white hover:bg-neutral-800">Add Source</button>
+            {/* <button onClick={handleAddSource} className="flex w-full items-center px-4 py-2 text-sm text-white hover:bg-neutral-800">Add Source</button> */}
             <button onClick={(e) => { e.stopPropagation(); setIsDropdownOpen(false); handleViewFiles(name); }} className="flex w-full items-center px-4 py-2 text-sm text-white hover:bg-neutral-800">View Files</button>
             {hasPendingTasks && (
               <button onClick={handleShowTaskStatus} className="flex w-full items-center px-4 py-2 text-sm font-medium text-[var(--nv-green)] hover:bg-neutral-800">
