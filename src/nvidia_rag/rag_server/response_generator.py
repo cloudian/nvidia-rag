@@ -24,6 +24,8 @@
 8. retrieve_summary(): Retrieve the summary of a document.
 """
 
+'''
+
 import asyncio
 import json
 import logging
@@ -419,6 +421,7 @@ def generate_answer(
     retrieval_time_ms: float | None = None,
     rag_start_time_sec: float | None = None,
     otel_metrics_client: OtelMetrics | None = None,
+    token_usage: dict | None = None,
 ):
     """Generate and stream the response to the provided prompt.
 
@@ -429,6 +432,8 @@ def generate_answer(
         collection_name: Name of the collection used for retrieval
         enable_citations: Whether to enable citations in the response
         otel_metrics_client: Optional OpenTelemetry metrics client for updating latency histograms
+        token_usage: Optional mutable dict (e.g. {}) that a callback may populate with
+            prompt_tokens, completion_tokens, and total_tokens for the final chunk.
     """
 
     try:
@@ -537,6 +542,16 @@ def generate_answer(
             # Create response first, then attach metrics for clarity
             chain_response = ChainResponse()
             chain_response.metrics = final_metrics
+            if token_usage:
+                total = token_usage.get("total_tokens") or (
+                    token_usage.get("prompt_tokens", 0) + token_usage.get("completion_tokens", 0)
+                )
+                if total > 0:
+                    chain_response.usage = Usage(
+                        prompt_tokens=token_usage.get("prompt_tokens", 0),
+                        completion_tokens=token_usage.get("completion_tokens", 0),
+                        total_tokens=total,
+                    )
 
             # [DONE] indicate end of response from server
             response_choice = ChainResponseChoices(
@@ -585,6 +600,7 @@ async def generate_answer_async(
     retrieval_time_ms: float | None = None,
     rag_start_time_sec: float | None = None,
     otel_metrics_client: OtelMetrics | None = None,
+    token_usage: dict | None = None,
 ):
     """Generate and stream the response to the provided prompt asynchronously.
 
@@ -595,6 +611,8 @@ async def generate_answer_async(
         collection_name: Name of the collection used for retrieval
         enable_citations: Whether to enable citations in the response
         otel_metrics_client: Optional OpenTelemetry metrics client for updating latency histograms
+        token_usage: Optional mutable dict (e.g. {}) that a callback may populate with
+            prompt_tokens, completion_tokens, and total_tokens for the final chunk.
     """
 
     try:
@@ -703,6 +721,16 @@ async def generate_answer_async(
             # Create response first, then attach metrics for clarity
             chain_response = ChainResponse()
             chain_response.metrics = final_metrics
+            if token_usage:
+                total = token_usage.get("total_tokens") or (
+                    token_usage.get("prompt_tokens", 0) + token_usage.get("completion_tokens", 0)
+                )
+                if total > 0:
+                    chain_response.usage = Usage(
+                        prompt_tokens=token_usage.get("prompt_tokens", 0),
+                        completion_tokens=token_usage.get("completion_tokens", 0),
+                        total_tokens=total,
+                    )
 
             # [DONE] indicate end of response from server
             response_choice = ChainResponseChoices(
@@ -1216,3 +1244,4 @@ def escape_json_content_multimodal(content: Any) -> Any:
 def escape_json_content(content: str) -> str:
     """Escape curly braces in content to avoid JSON parsing issues"""
     return content.replace("{", "{{").replace("}", "}}")
+'''

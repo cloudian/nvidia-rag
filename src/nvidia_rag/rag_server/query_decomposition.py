@@ -16,7 +16,7 @@
 """
 This module contains the logic for query decomposition.
 """
-
+'''
 import logging
 from typing import Any
 
@@ -743,3 +743,4 @@ async def iterative_query_decomposition(
         collection_name,
         prompts=prompts,
     )
+'''

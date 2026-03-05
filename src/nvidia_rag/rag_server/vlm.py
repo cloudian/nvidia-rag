@@ -25,7 +25,7 @@ Intended for use in NVIDIA's Retrieval-Augmented Generation (RAG) systems, compa
 Class:
     VLM: Provides methods for image analysis via messages and VLM/LLM reasoning.
 """
-
+'''
 import base64
 import io
 import os
@@ -740,3 +740,4 @@ class VLM:
                 f"Exception during VLM streaming call with messages: {e}", exc_info=True
             )
             return
+'''

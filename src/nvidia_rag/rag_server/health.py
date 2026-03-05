@@ -19,7 +19,7 @@
 4. print_health_report(): Print the health report for the services used by the application.
 5. check_and_print_services_health(): Check the health of all services and print a report.
 """
-
+'''
 import asyncio
 import logging
 import os
@@ -506,3 +506,4 @@ def check_services_health(vdb_op: VDBRag):
     Synchronous wrapper for checking service health
     """
     return asyncio.run(check_and_print_services_health(vdb_op))
+'''

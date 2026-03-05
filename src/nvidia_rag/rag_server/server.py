@@ -21,7 +21,7 @@ Endpoints:
 4. /search: Search for the most relevant documents for the given search parameters.
 5. /chat/completions: Just an alias function to /generate endpoint which is openai compatible
 """
-
+'''
 import asyncio
 import json
 import logging
@@ -2245,3 +2245,4 @@ v1_router.add_api_route(
 app.include_router(v1_router)
 # v2_router is mounted to provide /v2/* endpoints (OpenAI-compatible)
 app.include_router(v2_router)
+'''

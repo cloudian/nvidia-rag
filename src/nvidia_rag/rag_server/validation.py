@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+'''
 from typing import Any
 
 import bleach
@@ -153,3 +153,4 @@ def validate_vdb_top_k(vdb_top_k: int) -> int:
             f"Please provide a positive integer for the number of documents to retrieve from the vector database."
         )
     return vdb_top_k
+'''
