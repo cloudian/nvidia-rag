@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # router.py
-"""File routing module for MinIO event processing."""
+"""File routing module for HyperStore event processing."""
 
 import logging
 from pathlib import Path

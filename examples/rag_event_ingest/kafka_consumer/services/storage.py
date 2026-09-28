@@ -13,12 +13,12 @@ from minio import Minio
 from minio.error import S3Error
 
 from config import (
-    MINIO_ENDPOINT,
-    MINIO_ACCESS_KEY,
-    MINIO_SECRET_KEY,
-    MINIO_SECURE,
-    MINIO_DEFAULT_COLLECTION,
-    MINIO_SOURCES,
+    HYPERSTORE_ENDPOINT,
+    HYPERSTORE_ACCESS_KEY,
+    HYPERSTORE_SECRET_KEY,
+    HYPERSTORE_SECURE,
+    HYPERSTORE_DEFAULT_COLLECTION,
+    HYPERSTORE_SOURCES,
     CFG_ENDPOINT,
     CFG_ACCESS,
     CFG_SECRET,
@@ -66,8 +66,12 @@ class StorageBackend(ABC):
 # =============================================================================
 
 class S3Backend(StorageBackend):
-    """S3-compatible storage (MinIO, AWS S3, Wasabi, etc.)."""
-    
+    """S3-compatible storage (Cloudian HyperStore, AWS S3, MinIO, etc.).
+
+    Uses the `minio` Python SDK as a generic S3 client - it works against any
+    S3-compatible endpoint, including HyperStore.
+    """
+
     def __init__(self, client: Minio):
         self._client = client
     
@@ -128,19 +132,19 @@ class ObjectStorage:
         self._backends: Dict[str, StorageBackend] = {}
         self._bucket_to_backend: Dict[str, str] = {}
         self._bucket_to_collection: Dict[str, str] = {}
-        self._default_collection = MINIO_DEFAULT_COLLECTION
+        self._default_collection = HYPERSTORE_DEFAULT_COLLECTION
         self._configure()
     
     def _configure(self):
-        if MINIO_SOURCES:
-            self._configure_multi_source(MINIO_SOURCES)
+        if HYPERSTORE_SOURCES:
+            self._configure_multi_source(HYPERSTORE_SOURCES)
         else:
             self._configure_single_source()
     
     def _configure_single_source(self):
-        logger.info(f"Single S3 mode: {MINIO_ENDPOINT}")
+        logger.info(f"Single S3 mode: {HYPERSTORE_ENDPOINT}")
         self._backends['default'] = S3Backend.create(
-            MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_SECURE
+            HYPERSTORE_ENDPOINT, HYPERSTORE_ACCESS_KEY, HYPERSTORE_SECRET_KEY, HYPERSTORE_SECURE
         )
     
     def _configure_multi_source(self, sources_json: str):
@@ -154,8 +158,8 @@ class ObjectStorage:
         
         self._backends[name] = S3Backend.create(
             src[CFG_ENDPOINT],
-            src.get(CFG_ACCESS, MINIO_ACCESS_KEY),
-            src.get(CFG_SECRET, MINIO_SECRET_KEY),
+            src.get(CFG_ACCESS, HYPERSTORE_ACCESS_KEY),
+            src.get(CFG_SECRET, HYPERSTORE_SECRET_KEY),
             src.get(CFG_SECURE, False)
         )
         
@@ -181,7 +185,7 @@ class ObjectStorage:
         """Get collection name for bucket.
         
         Priority:
-        1. Explicit mapping from MINIO_SOURCES config
+        1. Explicit mapping from HYPERSTORE_SOURCES config
         2. Default collection from COLLECTION_NAME env var
         3. Fallback: bucket name with hyphens → underscores
         """

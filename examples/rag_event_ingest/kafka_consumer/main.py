@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # main.py
-"""Entry point for Kafka MinIO consumer."""
+"""Entry point for Kafka HyperStore consumer."""
 
 import logging
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def main():
     """Initialize and run the Kafka consumer."""
     logger.info("=" * 60)
-    logger.info("Starting Kafka MinIO Consumer")
+    logger.info("Starting Kafka HyperStore Consumer")
     logger.info("=" * 60)
     
     # Initialize services

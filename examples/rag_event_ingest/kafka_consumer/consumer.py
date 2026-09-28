@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # consumer.py
-"""Kafka consumer for MinIO S3 events."""
+"""Kafka consumer for HyperStore S3 events."""
 
 import json
 import logging
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class KafkaEventConsumer:
-    """Kafka consumer that routes MinIO events to handlers."""
+    """Kafka consumer that routes HyperStore events to handlers."""
     
     def __init__(
         self,
@@ -55,7 +55,7 @@ class KafkaEventConsumer:
         logger.info(f"Registered handlers: {list(self.handlers.keys())}")
     
     def process_event(self, raw_event: dict) -> Optional[HandlerResult]:
-        """Process a single MinIO S3 event."""
+        """Process a single HyperStore S3 event."""
         start_time = datetime.now()
         event: Optional[S3Event] = None
         result: Optional[HandlerResult] = None

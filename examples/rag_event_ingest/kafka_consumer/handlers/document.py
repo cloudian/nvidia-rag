@@ -36,7 +36,7 @@ class DocumentHandler(BaseHandler):
         """Process document file.
         
         1. Delete existing entries (for updates)
-        2. Download from MinIO
+        2. Download from HyperStore
         3. Upload to ingestor
         4. Wait for completion
         

@@ -36,7 +36,7 @@ from config.constants import (
 
 @dataclass
 class S3Event:
-    """Represents a MinIO S3 event from Kafka."""
+    """Represents a HyperStore S3 event from Kafka."""
     bucket: str
     key: str
     size: int

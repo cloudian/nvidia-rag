@@ -111,7 +111,9 @@ EVENT_BUCKET = 'bucket'
 EVENT_OBJECT = 'object'
 EVENT_KEY = 'key'
 EVENT_SIZE = 'size'
-EVENT_ETAG = 'eTag'
+# HyperStore's Kafka bucket-notification payload matches the MinIO event schema,
+# except the object eTag field is serialized in lowercase ("etag" not "eTag").
+EVENT_ETAG = 'etag'
 EVENT_NAME_FIELD = 'name'
 
 # Event type prefixes
@@ -161,7 +163,7 @@ STATUS_SUCCESS = 'SUCCESS'
 
 # ==================== Config Keys ====================
 
-# MinIO/S3 source config keys
+# HyperStore/S3 source config keys
 CFG_ENDPOINT = 'endpoint'
 CFG_ACCESS = 'access'
 CFG_SECRET = 'secret'
@@ -250,13 +252,13 @@ ENV_API_INGESTOR_COLLECTIONS = 'API_INGESTOR_COLLECTIONS'
 ENV_API_INGESTOR_COLLECTION = 'API_INGESTOR_COLLECTION'
 ENV_API_INGESTOR_STATUS = 'API_INGESTOR_STATUS'
 
-# MinIO
-ENV_MINIO_ENDPOINT = 'MINIO_ENDPOINT'
-ENV_MINIO_ACCESS_KEY = 'MINIO_ACCESS_KEY'
-ENV_MINIO_SECRET_KEY = 'MINIO_SECRET_KEY'
-ENV_MINIO_SECURE = 'MINIO_SECURE'
+# HyperStore (S3-compatible object storage)
+ENV_HYPERSTORE_ENDPOINT = 'HYPERSTORE_ENDPOINT'
+ENV_HYPERSTORE_ACCESS_KEY = 'HYPERSTORE_ACCESS_KEY'
+ENV_HYPERSTORE_SECRET_KEY = 'HYPERSTORE_SECRET_KEY'
+ENV_HYPERSTORE_SECURE = 'HYPERSTORE_SECURE'
 ENV_COLLECTION_NAME = 'COLLECTION_NAME'
-ENV_MINIO_SOURCES = 'MINIO_SOURCES'
+ENV_HYPERSTORE_SOURCES = 'HYPERSTORE_SOURCES'
 
 # Feature Flags
 ENV_ENABLE_IMAGE_PROCESSING = 'ENABLE_IMAGE_PROCESSING'
@@ -293,6 +295,6 @@ DEFAULT_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 DEFAULT_HISTORY_FILE = '/tmp/ingestion_history.jsonl'
 
 
-# ==================== MinIO Defaults ====================
+# ==================== HyperStore Defaults ====================
 
 DEFAULT_COLLECTION_NAME = 'multimodal_data'

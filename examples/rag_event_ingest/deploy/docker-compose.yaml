@@ -1,16 +1,25 @@
 # AIDP - AI Data Pipeline Docker Compose
-# Event-driven document ingestion with Kafka + MinIO sources
+# Event-driven document ingestion with Kafka + Cloudian HyperStore
+#
+# Unlike docker-compose.yaml (which runs a local MinIO instance as the S3
+# source), HyperStore is an existing, external S3-compatible system - it is
+# not deployed by this file. Only the Kafka broker used to relay HyperStore's
+# bucket notifications, and the kafka-consumer itself, run here.
 #
 # Usage:
 #   docker compose -f docker-compose.yaml up -d
 #
 # Prerequisites:
-#   - RAG stack running (from launchable.ipynb)
-#   - nvidia-rag network exists
+#   - AIDP RAG stack installed per the Cloudian HyperScale AIDP Install Guide
+#     (ingestor-server reachable, e.g. via its exposed NodePort)
+#   - HyperStore v8.2.9 (or later) with the SQS service and bucket
+#     notifications feature enabled, and a Kafka queue + bucket notification
+#     configured to publish to the "kafka" broker below (see the
+#     "Continuous Ingestion from HyperStore" section of the install guide)
 
 services:
   # =============================================================================
-  # KAFKA STACK (KRaft - no Zookeeper needed)
+  # KAFKA (KRaft - no Zookeeper needed)
   # =============================================================================
   kafka:
     image: apache/kafka:latest
@@ -37,7 +46,7 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     networks:
-      - nvidia-rag
+      - aidp-hs-ingest
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
       interval: 30s
@@ -56,95 +65,41 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - nvidia-rag
+      - aidp-hs-ingest
 
   # =============================================================================
-  # MINIO (Data Source)
-  # =============================================================================
-  minio-source-1:
-    image: minio/minio:RELEASE.2024-01-18T22-51-28Z
-    container_name: aidp-minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-      # Kafka notification configuration
-      MINIO_NOTIFY_KAFKA_ENABLE_AIDP: "on"
-      MINIO_NOTIFY_KAFKA_BROKERS_AIDP: "kafka:9092"
-      MINIO_NOTIFY_KAFKA_TOPIC_AIDP: "aidp-topic"
-    volumes:
-      - minio-data:/data
-    ports:
-      - "9201:9000"  
-      - "9211:9001"
-    networks:
-      - nvidia-rag
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # MinIO MC for bucket setup
-  minio-mc:
-    image: minio/mc:latest
-    container_name: aidp-minio-mc
-    depends_on:
-      minio-source-1:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      echo 'Waiting for MinIO...';
-      sleep 5;
-      
-      echo 'Setting up MinIO...';
-      mc alias set minio http://minio-source-1:9000 minioadmin minioadmin;
-      mc mb --ignore-existing minio/aidp-bucket;
-      mc event add minio/aidp-bucket arn:minio:sqs::AIDP:kafka --event put,delete || true;
-      
-      echo 'MinIO setup complete!';
-      echo 'Bucket: aidp-bucket on minio-source-1';
-      
-      echo 'Keeping container alive for mc commands...';
-      tail -f /dev/null
-      "
-    networks:
-      - nvidia-rag
-
-  # =============================================================================
-  # KAFKA CONSUMER (Event-driven Ingestion)
+  # KAFKA CONSUMER (Event-driven Ingestion from HyperStore)
   # =============================================================================
   kafka-consumer:
     build:
       context: ../kafka_consumer
       dockerfile: Dockerfile
-    image: kafka-consumer:local
-    container_name: kafka-consumer
+    image: kafka-consumer-hyperstore:local
+    container_name: kafka-consumer-hyperstore
     depends_on:
       kafka:
         condition: service_healthy
-      minio-source-1:
-        condition: service_healthy
     environment:
-      # Kafka
+      # Kafka - HyperStore's bucket notification queue must publish to this
+      # same broker, on the port reachable from the HyperStore node(s)
+      # (EXTERNAL listener, ${HOST_IP}:9094 - see the install guide).
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - KAFKA_TOPIC=${KAFKA_TOPIC:-aidp-topic}
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-aidp-hs-topic}
       - CONSUMER_GROUP=${CONSUMER_GROUP:-nvingest-consumer-group}
-      # MinIO
-      - MINIO_ENDPOINT=minio-source-1:9000
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
-      - MINIO_SECURE=false
-      # RAG Ingestor
-      - INGESTOR_SERVER_URL=${INGESTOR_SERVER_URL:-http://ingestor-server:8082}
+      # HyperStore S3 endpoint and credentials (root user - see install guide)
+      - HYPERSTORE_ENDPOINT=${HYPERSTORE_ENDPOINT:?Set HYPERSTORE_ENDPOINT, e.g. s3-region-1.mydomain.com:80}
+      - HYPERSTORE_ACCESS_KEY=${HYPERSTORE_ACCESS_KEY:?Set HYPERSTORE_ACCESS_KEY}
+      - HYPERSTORE_SECRET_KEY=${HYPERSTORE_SECRET_KEY:?Set HYPERSTORE_SECRET_KEY}
+      - HYPERSTORE_SECURE=${HYPERSTORE_SECURE:-false}
+      # RAG Ingestor - the AIDP node's own IP and the ingestor-server NodePort
+      # exposed per the install guide's "Expose Services" step
+      - INGESTOR_SERVER_URL=${INGESTOR_SERVER_URL:?Set INGESTOR_SERVER_URL, e.g. http://aidp-host:30085}
       - COLLECTION_NAME=${COLLECTION_NAME:-aidp_bucket}
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     restart: unless-stopped
     networks:
-      - nvidia-rag
+      - aidp-hs-ingest
 
 # =============================================================================
 # VOLUMES
@@ -152,13 +107,10 @@ services:
 volumes:
   kafka-data:
     driver: local
-  minio-data:
-    driver: local
 
 # =============================================================================
 # NETWORKS
 # =============================================================================
 networks:
-  nvidia-rag:
-    external: true
-    name: nvidia-rag
+  aidp-hs-ingest:
+    driver: bridge

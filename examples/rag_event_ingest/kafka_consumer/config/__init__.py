@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # config/__init__.py
-"""Configuration package for Kafka MinIO Consumer.
+"""Configuration package for Kafka HyperStore Consumer.
 
 Usage:
     import config.settings as cfg
@@ -24,13 +24,13 @@ from .settings import (
     # Services
     INGESTOR_SERVER_URL,
     INGESTOR_TIMEOUT,
-    # MinIO
-    MINIO_ENDPOINT,
-    MINIO_ACCESS_KEY,
-    MINIO_SECRET_KEY,
-    MINIO_SECURE,
-    MINIO_DEFAULT_COLLECTION,
-    MINIO_SOURCES,
+    # HyperStore
+    HYPERSTORE_ENDPOINT,
+    HYPERSTORE_ACCESS_KEY,
+    HYPERSTORE_SECRET_KEY,
+    HYPERSTORE_SECURE,
+    HYPERSTORE_DEFAULT_COLLECTION,
+    HYPERSTORE_SOURCES,
     # Features
     ENABLE_IMAGE_PROCESSING,
     ENABLE_AUDIO_PROCESSING,
@@ -107,7 +107,7 @@ from .constants import (
     STATUS_SKIPPED,
     STATUS_DELETED,
     STATUS_SUCCESS,
-    # Config keys (MinIO sources)
+    # Config keys (HyperStore sources)
     CFG_ENDPOINT,
     CFG_ACCESS,
     CFG_SECRET,
