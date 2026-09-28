@@ -32,6 +32,7 @@ from nvidia_rag.utils.llm import (
     get_prompts,
     get_streaming_filter_think_parser,
     streaming_filter_think,
+    streaming_split_reasoning_async,
 )
 
 
@@ -240,12 +241,8 @@ class TestGetLLM:
                 base_url="http://test-url:8000",
                 model="test-model",
                 api_key="test-api-key",
-                stop=[],
                 default_headers={"source": "rag-blueprint"},
-                temperature=0.7,
-                top_p=0.9,
                 max_completion_tokens=1024,
-                model_kwargs={"min_tokens": 1024, "ignore_eos": True},
             )
 
     @patch("nvidia_rag.utils.llm.sanitize_nim_url")
@@ -269,10 +266,7 @@ class TestGetLLM:
             mock_chatnvidia.assert_called_once_with(
                 model="test-model",
                 api_key="test-api-key",
-                temperature=None,
-                top_p=None,
                 max_completion_tokens=None,
-                stop=[],
                 default_headers={"source": "rag-blueprint"},
             )
 
@@ -322,10 +316,7 @@ class TestGetLLM:
                     openai_api_base="http://guardrails-service:8080/v1/guardrail",
                     openai_api_key="dummy-value",
                     default_headers={"source": "rag-blueprint", "X-Model-Authorization": "test-api-key"},
-                    temperature=0.7,
-                    top_p=None,
                     max_tokens=None,
-                    stop=[],
                 )
 
     @patch("requests.get")
@@ -412,16 +403,11 @@ class TestGetLLM:
             with patch("nvidia_rag.utils.llm.ChatNVIDIA") as mock_chatnvidia:
                 get_llm(**kwargs)
 
-                # When min_tokens is None and ignore_eos is False, model_kwargs is still added with ignore_eos
                 mock_chatnvidia.assert_called_once_with(
                     model="test-model",
                     api_key="test-api-key",
-                    temperature=None,
-                    top_p=None,
                     max_completion_tokens=None,
-                    stop=[],
                     default_headers={"source": "rag-blueprint"},
-                    model_kwargs={"ignore_eos": False},
                 )
 
 
@@ -429,9 +415,10 @@ class TestStreamingFilterThink:
     """Test cases for streaming_filter_think function."""
 
     def create_mock_chunk(self, content):
-        """Helper to create mock chunk with content attribute."""
+        """Helper to create mock chunk with content and additional_kwargs (so 'in' works)."""
         chunk = Mock()
         chunk.content = content
+        chunk.additional_kwargs = {}
         return chunk
 
     def test_streaming_filter_think_no_tags(self):
@@ -648,6 +635,84 @@ class TestGetStreamingFilterThinkParser:
         mock_runnable_passthrough.assert_called_once()
 
 
+class TestStreamingSplitReasoningAsync:
+    """Test cases for preserving reasoning in structured chunks."""
+
+    def create_mock_chunk(self, content="", reasoning_content=None, reasoning=None):
+        """Create a mock chunk with content and optional reasoning metadata."""
+        chunk = Mock()
+        chunk.content = content
+        chunk.additional_kwargs = {}
+        if reasoning_content is not None:
+            chunk.additional_kwargs["reasoning_content"] = reasoning_content
+        if reasoning is not None:
+            chunk.additional_kwargs["reasoning"] = reasoning
+        return chunk
+
+    async def _collect(self, chunks):
+        async def gen():
+            for chunk in chunks:
+                yield chunk
+
+        result = []
+        async for chunk in streaming_split_reasoning_async(gen()):
+            result.append(
+                (
+                    chunk.content,
+                    chunk.additional_kwargs.get("reasoning_content"),
+                )
+            )
+        return result
+
+    @pytest.mark.asyncio
+    async def test_reasoning_content_field_is_preserved(self):
+        chunks = [
+            self.create_mock_chunk(reasoning_content="think "),
+            self.create_mock_chunk(content="answer"),
+        ]
+
+        result = await self._collect(chunks)
+
+        assert result == [("", "think "), ("answer", None)]
+
+    @pytest.mark.asyncio
+    async def test_inline_think_block_is_moved_to_reasoning_content(self):
+        chunks = [
+            self.create_mock_chunk("Before <think>hidden</think> after"),
+        ]
+
+        result = await self._collect(chunks)
+
+        assert result == [("Before ", None), ("", "hidden"), (" after", None)]
+
+    @pytest.mark.asyncio
+    async def test_split_think_tags_are_moved_to_reasoning_content(self):
+        chunks = [
+            self.create_mock_chunk("A "),
+            self.create_mock_chunk("<th"),
+            self.create_mock_chunk("ink"),
+            self.create_mock_chunk(">why"),
+            self.create_mock_chunk("</"),
+            self.create_mock_chunk("think"),
+            self.create_mock_chunk("> B"),
+        ]
+
+        result = await self._collect(chunks)
+
+        assert result == [("A ", None), ("", "why"), (" B", None)]
+
+    @pytest.mark.asyncio
+    async def test_plain_content_stays_in_content(self):
+        chunks = [
+            self.create_mock_chunk("Hello "),
+            self.create_mock_chunk("world"),
+        ]
+
+        result = await self._collect(chunks)
+
+        assert result == [("Hello ", None), ("world", None)]
+
+
 class TestLLMIntegration:
     """Integration tests for LLM utilities."""
 
@@ -683,12 +748,8 @@ class TestLLMIntegration:
                     base_url="http://test:8000",
                     model="meta/llama-3.1-8b-instruct",
                     api_key="test-api-key",
-                    stop=[],
                     default_headers={"source": "rag-blueprint"},
-                    temperature=0.7,
-                    top_p=0.9,
                     max_completion_tokens=2048,
-                    model_kwargs={"min_tokens": 2048, "ignore_eos": True},
                 )
 
     @patch("nvidia_rag.utils.llm.sanitize_nim_url")
@@ -723,8 +784,8 @@ class TestLLMIntegration:
 
             # Verify NVIDIA-specific parameters are NOT included
             call_kwargs = mock_chatnvidia.call_args[1]
-            assert call_kwargs["temperature"] == 0.7
-            assert call_kwargs["top_p"] == 0.9
+            assert "temperature" not in call_kwargs
+            assert "top_p" not in call_kwargs
             assert call_kwargs["max_completion_tokens"] == 1024
             assert "min_tokens" not in call_kwargs
             assert "ignore_eos" not in call_kwargs
@@ -745,13 +806,19 @@ class TestLLMIntegration:
             mock_config = Mock()
             mock_config.llm.model_engine = "nvidia-ai-endpoints"
             mock_config.llm.get_api_key.return_value = "test-api-key"
+            mock_config.llm.parameters.enable_thinking = False
+            mock_config.llm.parameters.reasoning_budget = 0
+            mock_config.llm.parameters.low_effort = False
+            mock_config.llm.parameters.min_thinking_tokens = 0
+            mock_config.llm.parameters.max_thinking_tokens = 0
             mock_config.enable_guardrails = False
             mock_config_class.return_value = mock_config
 
             kwargs = {
-                "model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+                "model": "nvidia/nemotron-3-super-120b-a12b",
                 "llm_endpoint": "http://localhost:8000",
                 "temperature": 0.7,
+                "top_p": 0.9,
                 "min_tokens": 100,
                 "ignore_eos": True,
             }
@@ -760,9 +827,41 @@ class TestLLMIntegration:
 
             call_kwargs = mock_chatnvidia.call_args[1]
             assert call_kwargs["temperature"] == 0.7
+            assert call_kwargs["top_p"] == 0.9
             # NVIDIA-specific params are now passed via model_kwargs
             assert call_kwargs["model_kwargs"]["min_tokens"] == 100
             assert call_kwargs["model_kwargs"]["ignore_eos"] is True
+
+    @patch("nvidia_rag.utils.llm.sanitize_nim_url")
+    @patch("nvidia_rag.utils.llm.ChatNVIDIA")
+    @patch.dict(os.environ, {}, clear=True)
+    def test_get_llm_nvidia_endpoint_non_nvidia_model_excludes_nvidia_params(
+        self, mock_chatnvidia, mock_sanitize
+    ):
+        """Test NVIDIA endpoints do not send NIM params for non-NVIDIA model names."""
+        mock_sanitize.return_value = "https://integrate.api.nvidia.com/v1"
+
+        with patch("nvidia_rag.utils.llm.NvidiaRAGConfig") as mock_config_class:
+            mock_config = Mock()
+            mock_config.llm.model_engine = "nvidia-ai-endpoints"
+            mock_config.llm.get_api_key.return_value = "test-api-key"
+            mock_config.enable_guardrails = False
+            mock_config_class.return_value = mock_config
+
+            get_llm(
+                model="meta/llama-3.1-8b-instruct",
+                llm_endpoint="https://integrate.api.nvidia.com/v1",
+                temperature=0.7,
+                top_p=0.9,
+                min_tokens=100,
+                ignore_eos=True,
+            )
+
+            call_kwargs = mock_chatnvidia.call_args[1]
+            assert call_kwargs["base_url"] == "https://integrate.api.nvidia.com/v1"
+            assert "temperature" not in call_kwargs
+            assert "top_p" not in call_kwargs
+            assert "model_kwargs" not in call_kwargs
 
     @patch("nvidia_rag.utils.llm.sanitize_nim_url")
     @patch("nvidia_rag.utils.llm.ChatNVIDIA")
@@ -775,12 +874,19 @@ class TestLLMIntegration:
             mock_config = Mock()
             mock_config.llm.model_engine = "nvidia-ai-endpoints"
             mock_config.llm.get_api_key.return_value = "test-api-key"
+            mock_config.llm.parameters.enable_thinking = False
+            mock_config.llm.parameters.reasoning_budget = 0
+            mock_config.llm.parameters.low_effort = False
+            mock_config.llm.parameters.min_thinking_tokens = 0
+            mock_config.llm.parameters.max_thinking_tokens = 0
             mock_config.enable_guardrails = False
             mock_config_class.return_value = mock_config
 
             kwargs = {
-                "model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+                "model": "nvidia/nemotron-3-super-120b-a12b",
                 "llm_endpoint": "",
+                "temperature": 0.7,
+                "top_p": 0.9,
                 "min_tokens": 100,
             }
 
@@ -788,6 +894,8 @@ class TestLLMIntegration:
 
             # Empty URL should default to NVIDIA (API catalog), so min_tokens should be in model_kwargs
             call_kwargs = mock_chatnvidia.call_args[1]
+            assert call_kwargs["temperature"] == 0.7
+            assert call_kwargs["top_p"] == 0.9
             assert call_kwargs["model_kwargs"]["min_tokens"] == 100
 
     def test_is_nvidia_endpoint(self):
@@ -826,67 +934,84 @@ class TestLLMIntegration:
         assert result == expected
 
     def create_mock_chunk(self, content):
-        """Helper to create mock chunk with content attribute."""
+        """Helper to create mock chunk with content and additional_kwargs (so 'in' works)."""
         chunk = Mock()
         chunk.content = content
+        chunk.additional_kwargs = {}
         return chunk
 
 
-class TestThinkingBudgetNemotron3Nano30B:
-    """Tests for thinking budget behavior with nvidia/nemotron-3-nano-30b-a3b."""
+class TestBindReasoningConfigNemotron3Nano:
+    """Tests for _bind_reasoning_config with nemotron-3-nano models."""
 
-    @patch.dict(os.environ, {"ENABLE_NEMOTRON_3_NANO_THINKING": "true"})
-    def test_bind_thinking_tokens_for_nemotron_30b_maps_reasoning_budget(self):
-        """max_thinking_tokens for nemotron-3-nano-30b-a3b maps to reasoning_budget."""
-        from nvidia_rag.utils.llm import _bind_thinking_tokens_if_configured
+    @patch.dict(os.environ, {"LLM_ENABLE_THINKING": "true"})
+    def test_bind_reasoning_config_nemotron_3_nano_with_budget(self):
+        """enable_thinking + reasoning_budget for nemotron-3-nano binds chat_template_kwargs and reasoning_budget."""
+        from nvidia_rag.utils.llm import _bind_reasoning_config
 
         mock_llm = Mock()
-        bound_llm = _bind_thinking_tokens_if_configured(
+        mock_llm.bind.return_value = mock_llm
+        config = Mock()
+        config.llm.parameters.enable_thinking = True
+        config.llm.parameters.reasoning_budget = 8192
+        config.llm.parameters.low_effort = False
+        config.llm.parameters.min_thinking_tokens = 0
+        config.llm.parameters.max_thinking_tokens = 0
+
+        bound_llm = _bind_reasoning_config(
             mock_llm,
+            config=config,
             model="nvidia/nemotron-3-nano-30b-a3b",
-            max_thinking_tokens=8192,
         )
 
-        mock_llm.bind.assert_called_once_with(
-            reasoning_budget=8192,
+        calls = mock_llm.bind.call_args_list
+        assert any(
+            call.kwargs.get("chat_template_kwargs", {}).get("enable_thinking") is True
+            for call in calls
         )
-        assert bound_llm is mock_llm.bind.return_value
+        assert bound_llm is mock_llm
 
-    def test_min_thinking_tokens_alone_raises_for_nemotron_30b(self):
-        """min_thinking_tokens alone raises ValueError for nemotron-3-nano-30b-a3b (max_thinking_tokens required)."""
-        from nvidia_rag.utils.llm import _bind_thinking_tokens_if_configured
-
-        mock_llm = Mock()
-        with pytest.raises(ValueError, match="max_thinking_tokens must be a positive integer"):
-            _bind_thinking_tokens_if_configured(
-                mock_llm,
-                model="nvidia/nemotron-3-nano-30b-a3b",
-                min_thinking_tokens=1,
-            )
-
-    def test_thinking_tokens_unsupported_model_raises(self):
-        """Using thinking tokens with unsupported model raises ValueError."""
-        from nvidia_rag.utils.llm import _bind_thinking_tokens_if_configured
+    def test_bind_reasoning_config_unsupported_model_returns_original(self):
+        """Unsupported model returns original LLM without binding."""
+        from nvidia_rag.utils.llm import _bind_reasoning_config
 
         mock_llm = Mock()
-        with pytest.raises(ValueError):
-            _bind_thinking_tokens_if_configured(
-                mock_llm,
-                model="meta/llama-3.1-8b-instruct",
-                max_thinking_tokens=10,
-            )
+        config = Mock()
+        config.llm.parameters.enable_thinking = False
+        config.llm.parameters.reasoning_budget = 0
+        config.llm.parameters.low_effort = False
+        config.llm.parameters.min_thinking_tokens = 0
+        config.llm.parameters.max_thinking_tokens = 0
 
-
-class TestThinkingBudgetNemotronNano9B:
-    """Tests for thinking budget behavior with nvidia/nvidia-nemotron-nano-9b-v2."""
-
-    def test_bind_thinking_tokens_for_nano_9b_binds_min_and_max(self):
-        """Both min_thinking_tokens and max_thinking_tokens bind for nano-9b."""
-        from nvidia_rag.utils.llm import _bind_thinking_tokens_if_configured
-
-        mock_llm = Mock()
-        bound_llm = _bind_thinking_tokens_if_configured(
+        bound_llm = _bind_reasoning_config(
             mock_llm,
+            config=config,
+            model="meta/llama-3.1-8b-instruct",
+        )
+
+        mock_llm.bind.assert_not_called()
+        assert bound_llm is mock_llm
+
+
+class TestBindReasoningConfigNemotronNano9B:
+    """Tests for _bind_reasoning_config with nvidia/nvidia-nemotron-nano-9b-v2."""
+
+    def test_bind_reasoning_config_nano_9b_binds_min_and_max(self):
+        """Both min_thinking_tokens and max_thinking_tokens bind for nano-9b."""
+        from nvidia_rag.utils.llm import _bind_reasoning_config
+
+        mock_llm = Mock()
+        mock_llm.bind.return_value = mock_llm
+        config = Mock()
+        config.llm.parameters.enable_thinking = False
+        config.llm.parameters.reasoning_budget = 0
+        config.llm.parameters.low_effort = False
+        config.llm.parameters.min_thinking_tokens = 1
+        config.llm.parameters.max_thinking_tokens = 8192
+
+        bound_llm = _bind_reasoning_config(
+            mock_llm,
+            config=config,
             model="nvidia/nvidia-nemotron-nano-9b-v2",
             min_thinking_tokens=1,
             max_thinking_tokens=8192,
@@ -898,13 +1023,21 @@ class TestThinkingBudgetNemotronNano9B:
         )
         assert bound_llm is mock_llm.bind.return_value
 
-    def test_no_thinking_tokens_for_nano_9b_returns_original_llm(self):
+    def test_bind_reasoning_config_nano_9b_no_tokens_returns_original(self):
         """If no thinking tokens are provided, nano-9b returns original LLM."""
-        from nvidia_rag.utils.llm import _bind_thinking_tokens_if_configured
+        from nvidia_rag.utils.llm import _bind_reasoning_config
 
         mock_llm = Mock()
-        bound_llm = _bind_thinking_tokens_if_configured(
+        config = Mock()
+        config.llm.parameters.enable_thinking = False
+        config.llm.parameters.reasoning_budget = 0
+        config.llm.parameters.low_effort = False
+        config.llm.parameters.min_thinking_tokens = 0
+        config.llm.parameters.max_thinking_tokens = 0
+
+        bound_llm = _bind_reasoning_config(
             mock_llm,
+            config=config,
             model="nvidia/nvidia-nemotron-nano-9b-v2",
         )
 

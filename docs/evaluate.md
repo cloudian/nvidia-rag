@@ -7,6 +7,8 @@
 After you [deploy your NVIDIA RAG Blueprint system](readme.md#deployment-options-for-rag-blueprint),
 you can evaluate it by using [Ragas](https://docs.ragas.io/en/stable/) metrics specifically designed for Large Language Model (LLM) Applications.
 
+For published benchmark results across multiple datasets and configurations, refer to [RAG Accuracy Benchmarks](accuracy-benchmarks.md).
+
 
 ## Ragas Metrics
 
@@ -29,10 +31,13 @@ You can also evaluate how well the retrieval system performs by using the [Conte
 
 For more information, refer to the notebook [Evaluate Your RAG Pipeline with Ragas: Recall](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/notebooks/evaluation_02_recall.ipynb).
 
+## Filesystem benchmark CLI
 
+The repository also includes a command-line driver, `scripts/eval/evaluate_rag.py`, for on-disk dataset roots (`corpus/` plus `train.json`). Its Python dependencies are declared in `scripts/eval/pyproject.toml`. From the repository root, use `uv sync --project scripts/eval` and `uv run --project scripts/eval python scripts/eval/evaluate_rag.py` (see [scripts/eval/README.md](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/scripts/eval/README.md) for the full contract and examples).
 
 ## Related Topics
 
 - [NVIDIA RAG Blueprint Documentation](readme.md)
 - [Get Started](deploy-docker-self-hosted.md)
 - [Notebooks](notebooks.md)
+- [RAG Accuracy Benchmarks](accuracy-benchmarks.md)
