@@ -101,7 +101,9 @@ Use the following notebooks to learn comprehensive Python client usage, metadata
 
 - [rag_library_usage.ipynb](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/notebooks/rag_library_usage.ipynb) – Demonstrates native usage of the NVIDIA RAG Python client, including environment setup, document ingestion, collection management, and querying. This notebook provides end-to-end API usage examples for interacting directly with the RAG system from Python, covering both ingestion and retrieval workflows.
 
-- [rag_library_lite_usage.ipynb](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/notebooks/rag_library_lite_usage.ipynb) – Demonstrates containerless deployment of the NVIDIA RAG Python package in lite mode. Uses Milvus Lite (embedded vector database) and NV-Ingest subprocess mode for a simplified setup without Docker containers. Leverages NVIDIA cloud APIs for embeddings, ranking, and LLM inference. **Note**: This mode does not support image/table/chart citations or document summarization.
+- [rag_library_lite_usage.ipynb](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/notebooks/rag_library_lite_usage.ipynb) – Demonstrates containerless deployment of the NVIDIA RAG Python package in lite mode. Uses Milvus Lite (embedded vector database) and NeMo Retriever Library subprocess mode for a simplified setup without Docker containers. Leverages NVIDIA cloud APIs for embeddings, ranking, and LLM inference. **Note**: This mode does not support image/table/chart citations or document summarization.
+
+- [langchain_nvidia_retriever.ipynb](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/notebooks/langchain_nvidia_retriever.ipynb) – Showcases **LangChain integration** with the NVIDIA RAG Blueprint. Run [ingestion_api_usage.ipynb](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/notebooks/ingestion_api_usage.ipynb) first to ingest documents, then use `NVIDIARAGRetriever` for retrieval (sync/async), custom parameters, error handling, and optional RAG chaining with `ChatNVIDIA`.
 
 
 
@@ -122,7 +124,7 @@ Use the following notebooks to learn how to how to extend the system with custom
 
 Use the following notebook for cloud deployment scenarios.
 
-- [launchable.ipynb](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/notebooks/launchable.ipynb) – A deployment-ready notebook intended to run in a [Brev environment](https://console.brev.dev/environment/new). To learn more about Brev, refer to [Brev](https://docs.nvidia.com/brev/latest/about-brev.html). Follow the instructions for running Jupyter notebooks in a cloud-based environment based on the hardware requirements specified in the launchable.
+- [launchable.ipynb](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/notebooks/launchable.ipynb) – A deployment-ready notebook intended to run in a [Brev environment](https://console.brev.dev/environment/new). To learn more about Brev, refer to [Brev](https://developer.nvidia.com/brev). Follow the instructions for running Jupyter notebooks in a cloud-based environment based on the hardware requirements specified in the launchable.
 
 
 ## Related Topics

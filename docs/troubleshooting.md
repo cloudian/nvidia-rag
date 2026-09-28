@@ -87,10 +87,10 @@ During first-time deployments, large models are downloaded without visible progr
 docker logs -f nim-llm-ms
 
 # Monitor embedding service
-docker logs -f nemoretriever-embedding-ms
+docker logs -f nemotron-embedding-ms
 
 # Monitor ranking service
-docker logs -f nemoretriever-ranking-ms
+docker logs -f nemotron-ranking-ms
 ```
 
 **Check disk usage to verify download progress:**
@@ -105,7 +105,7 @@ watch -n 10 'du -sh ~/.cache/model-cache/'
 **Check container stats:**
 ```bash
 # View resource usage and verify containers are active
-docker stats nim-llm-ms nemoretriever-embedding-ms nemoretriever-ranking-ms
+docker stats nim-llm-ms nemotron-embedding-ms nemotron-ranking-ms
 ```
 
 ### Kubernetes/Helm Deployments
@@ -206,7 +206,7 @@ This can reduce the page-per-second performance for the ingestion. For maximum p
 
 ## Confidence threshold filtering issues
 
-If no documents are returned when using confidence threshold filtering, the threshold may be set too high. Try lowering the `confidence_threshold` value or ensure the reranker is enabled to provide relevance scores. Confidence threshold filtering works best when reranker is enabled. Without reranker, documents may not have meaningful relevance scores. For optimal results, use confidence threshold values between 0.3-0.7. Values above 0.7 may be too restrictive.
+If no documents are returned when using confidence threshold filtering, the threshold may be set too high. Try lowering the `confidence_threshold` value (request body) or the server default via `RERANKER_SCORE_THRESHOLD` (env), or ensure the reranker is enabled to provide relevance scores. Confidence threshold filtering works best when reranker is enabled. Without reranker, documents may not have meaningful relevance scores. For optimal results, use confidence threshold values between 0.3-0.7. Values above 0.7 may be too restrictive.
 
 
 
@@ -222,6 +222,15 @@ To resolve this issue, upgrade Docker Compose to version `v2.29.0` or later.
 * error decoding 'Deploy.Resources.Reservations.devices[0]': invalid string value for 'count' (the only value allowed is 'all')
 ```
 
+## NGC image pull error with Docker Engine 29.5.x
+
+You might encounter the following error while Docker pulls required NGC images.
+
+```bash
+error from registry: Incorrect Repository Format
+```
+
+This is known to occur with Docker Engine 29.5.x. Use a different Docker Engine version, such as 29.4.3.
 
 
 ## Device error
@@ -249,7 +258,7 @@ Original error: Error during NimClient inference [yolox-page-elements, grpc]: [S
 In case you were expecting to use NVIDIA-hosted model for this service, then ensure the corresponding environment variables were set in the same terminal from where you did docker compose up. Following the above example the environment variables which are expected to be set are:
 
 ```output
-   export YOLOX_HTTP_ENDPOINT="https://ai.api.nvidia.com/v1/cv/nvidia/nemoretriever-page-elements-v3"
+   export YOLOX_HTTP_ENDPOINT="https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-page-elements-v3"
    export YOLOX_INFER_PROTOCOL="http"
 ```
 
@@ -309,7 +318,7 @@ If you change the embedding model or dimensions after ingesting documents, you m
 
 
 
-## Error details: [###] Too many open files for llama-3.3-nemotron-super-49b-v1.5 container
+## Error details: [###] Too many open files for nemotron-3-super-120b-a12b container
 source: hyper_util::client::legacy::Error(Connect, ConnectError("dns error", Os { code: 24, kind: Uncategorized, message: "Too many open files" })) })
 
 This error happens because the default number of Open files allowed are 1024 for Containers. Follow the below steps to modify the container configuration to allow more number of open files.
@@ -340,7 +349,7 @@ If the above error related to dependency conflicts are seen while building conta
 We've integrated VDB and embedding creation directly into the pipeline with caching included for expediency.
 However, in a production environment, it's better to use a separately managed VDB service.
 
-NVIDIA offers optimized models and tools like NVIDIA NeMo Retriever ([build.nvidia.com/explore/retrieval](https://build.nvidia.com/explore/retrieval))
+NVIDIA offers optimized models and tools like NVIDIA NeMo Retriever Library ([build.nvidia.com/explore/retrieval](https://build.nvidia.com/explore/retrieval))
 and cuVS ([github.com/rapidsai/cuvs](https://github.com/rapidsai/cuvs)).
 
 
@@ -367,7 +376,7 @@ Adding this information may impact response accuracy, especially when partial in
 ## Helm Deployment Issues
 
 ### PVCs in Pending state (StorageClass issues)
-If NIM Cache PVCs (e.g., `nemoretriever-embedding-ms-cache-pvc`) remain in `Pending` state, check if they are requesting a `storageClassName: default` that does not exist.
+If NIM Cache PVCs (e.g., `nemotron-embedding-ms-cache-pvc`) remain in `Pending` state, check if they are requesting a `storageClassName: default` that does not exist.
 **Fix:** Ensure you have a default storage class. If using `local-path`, you can create an alias:
 ```yaml
 apiVersion: storage.k8s.io/v1
@@ -383,9 +392,9 @@ volumeBindingMode: WaitForFirstConsumer
 If using `local-path` provisioner, it does not support `ReadWriteMany` access mode, which is the default for some NIM Caches.
 **Fix:** Patch the NIMCache resources to use `ReadWriteOnce`:
 ```bash
-kubectl patch nimcache nemoretriever-page-elements-v3 -n rag --type='merge' -p '{"spec":{"storage":{"pvc":{"volumeAccessMode":"ReadWriteOnce"}}}}'
+kubectl patch nimcache nemotron-page-elements-v3 -n rag --type='merge' -p '{"spec":{"storage":{"pvc":{"volumeAccessMode":"ReadWriteOnce"}}}}'
 # Repeat for other affected caches (table-structure-v1, ocr-v1, graphic-elements-v1)
-kubectl delete pvc nemoretriever-page-elements-v3-pvc -n rag --wait=false # Delete pending PVC to trigger recreation
+kubectl delete pvc nemotron-page-elements-v3-pvc -n rag --wait=false # Delete pending PVC to trigger recreation
 ```
 
 ### Ingestor-server out of memory (OOM) with large documents
@@ -455,8 +464,7 @@ If you run into `torch.OutOfMemoryError: CUDA out of memory.` while deploying th
 ## Password Issue Fix
 
 If you encounter any `password authentication failed` issues with the structured retriever container,
-consider removing the volumes directory located at `deploy/compose/volumes`.
-In this case, you may need to reprocess the data ingestion.
+remove the `rag-vol-*` Docker named volumes (`docker volume ls -q --filter name=^rag-vol- | xargs -r docker volume rm`). In this case, you may need to reprocess the data ingestion. See [Manage Persistent Data Volumes](#manage-persistent-data-volumes) for selective wipes if you only need to reset one service.
 
 
 
@@ -471,14 +479,127 @@ This happens when a collection created with vector search type `hybrid` is acces
 
 ## Reset the entire cache
 
-To reset the entire cache, you can run the following command.
-This deletes all the volumes associated with the containers, including the cache.
+To reset the entire cache, stop the stack and remove the `rag-vol-*` Docker named volumes. This deletes **all** persisted state (Elasticsearch / Milvus / etcd / SeaweedFS / LanceDB / ingestor-server scratch).
 
 ```bash
-docker compose down -v
+docker compose -f deploy/compose/docker-compose-rag-server.yaml down
+docker compose -f deploy/compose/docker-compose-ingestor-server.yaml down
+docker compose -f deploy/compose/vectordb.yaml down
+docker volume ls -q --filter "name=^rag-vol-" | xargs -r docker volume rm
 ```
 
+See [Manage Persistent Data Volumes](#manage-persistent-data-volumes) below for backup, selective wipes, and migration from the legacy `deploy/compose/volumes/` host directory.
 
+
+
+## Manage Persistent Data Volumes
+
+All persistent data for the Docker Compose deployment is stored in dedicated Docker named volumes that share the `rag-vol-` prefix. They replace the legacy `deploy/compose/volumes/` host directory tree, and each is auto-created by `docker compose up` on first use — no host `mkdir` / `chown` or manual setup is needed.
+
+| Volume | Service | Mount target inside container |
+|---|---|---|
+| `rag-vol-milvus` | `milvus-standalone` | `/var/lib/milvus` |
+| `rag-vol-etcd` | `milvus-etcd` | `/etcd` |
+| `rag-vol-seaweedfs` | `seaweedfs` | `/data` |
+| `rag-vol-elasticsearch` | `elasticsearch` | `/usr/share/elasticsearch/data` |
+| `rag-vol-ingestor` | `ingestor-server` | `${INGESTOR_SERVER_DATA_DIR:-/data/}` |
+| `rag-vol-lancedb` | `ingestor-server`, `rag-server` | `/volumes/lancedb` |
+
+On the Docker host, each volume lives under `/var/lib/docker/volumes/<name>/_data/`. Every compose file declares the volumes with an explicit `name:` so they bypass the compose-project prefix — that means the `rag-vol-lancedb` mounted by `docker-compose-ingestor-server.yaml` is the same physical volume mounted by `docker-compose-rag-server.yaml`, and so on.
+
+### Inspect
+
+```bash
+# List all rag-* volumes:
+docker volume ls --filter "name=^rag-vol-"
+
+# Where is a specific volume on disk?
+docker volume inspect rag-vol-elasticsearch --format '{{ .Mountpoint }}'
+# → /var/lib/docker/volumes/rag-vol-elasticsearch/_data
+
+# List the contents of a volume (use a throwaway alpine container — the host path is root-owned).
+docker run --rm -v rag-vol-ingestor:/data:ro alpine ls -la /data
+```
+
+### Backup
+
+```bash
+# Snapshot a single volume to a tarball in the current directory:
+docker run --rm -v rag-vol-elasticsearch:/source:ro -v "$PWD":/backup alpine \
+  tar czf /backup/rag-vol-elasticsearch-$(date +%Y%m%d).tgz -C /source .
+
+# Snapshot every rag-vol-* volume in one shot:
+for v in $(docker volume ls -q --filter "name=^rag-vol-"); do
+  docker run --rm -v "$v":/source:ro -v "$PWD":/backup alpine \
+    tar czf "/backup/${v}-$(date +%Y%m%d).tgz" -C /source .
+done
+```
+
+### Restore
+
+```bash
+# Restore a single volume from a backup tarball:
+docker volume create rag-vol-elasticsearch
+docker run --rm -v rag-vol-elasticsearch:/dst -v "$PWD":/backup alpine \
+  tar xzf /backup/rag-vol-elasticsearch-YYYYMMDD.tgz -C /dst
+```
+
+### Reset
+
+Stop the stack first, then either wipe everything or just one volume.
+
+```bash
+# Wipe everything (re-ingestion required):
+docker volume ls -q --filter "name=^rag-vol-" | xargs -r docker volume rm
+
+# Wipe just one service's state (e.g. only Milvus + etcd, keeping ingestor scratch):
+docker volume rm rag-vol-milvus rag-vol-etcd
+```
+
+### Migrating from the legacy `deploy/compose/volumes/` host directory
+
+Earlier releases bind-mounted persistent data from `deploy/compose/volumes/`. If you are upgrading and want to keep that data, copy each subdirectory into its corresponding `rag-vol-*` volume once before bringing the new stack up:
+
+```bash
+# 1. Stop any running compose stacks first so files aren't being written.
+docker compose -f deploy/compose/docker-compose-rag-server.yaml down || true
+docker compose -f deploy/compose/docker-compose-ingestor-server.yaml down || true
+docker compose -f deploy/compose/vectordb.yaml down || true
+
+# 2. For each legacy subdirectory you want to preserve, copy it into the matching
+#    rag-vol-* volume. Adjust the loop if you don't have all six.
+declare -A MAP=(
+  [milvus]=rag-vol-milvus
+  [etcd]=rag-vol-etcd
+  [seaweedfs]=rag-vol-seaweedfs
+  [elasticsearch]=rag-vol-elasticsearch
+  [ingestor-server]=rag-vol-ingestor
+  [lancedb]=rag-vol-lancedb
+)
+for src_dir in "${!MAP[@]}"; do
+  legacy="deploy/compose/volumes/${src_dir}"
+  vol="${MAP[$src_dir]}"
+  [ -d "$legacy" ] || { echo "skip $legacy (not present)"; continue; }
+  docker volume create "$vol" >/dev/null
+  docker run --rm \
+    -v "$PWD/$legacy":/src:ro \
+    -v "$vol":/dst \
+    alpine sh -c "cp -a /src/. /dst/"
+  echo "migrated $legacy → $vol"
+done
+
+# 3. Elasticsearch + ingestor expect UID/GID 1000 ownership inside their volumes.
+docker run --rm -v rag-vol-elasticsearch:/data alpine chown -R 1000:1000 /data
+docker run --rm -v rag-vol-ingestor:/data alpine chown -R 1000:1000 /data
+
+# 4. Spot-check.
+docker volume ls --filter "name=^rag-vol-"
+
+# 5. Once the stack starts and data is intact, you can remove the legacy directory:
+sudo rm -rf deploy/compose/volumes
+```
+
+If you do **not** need to preserve the legacy data, just delete `deploy/compose/volumes/` — Docker will create fresh empty volumes on the first `docker compose up`.
 
 ## Running out of credits
 

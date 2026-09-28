@@ -33,7 +33,7 @@ docker logs -f nim-llm-ms
 watch -n 10 'du -sh ~/.cache/model-cache/'
 
 # Check specific container resource usage
-docker stats nim-llm-ms nemoretriever-embedding-ms nemoretriever-ranking-ms
+docker stats nim-llm-ms nemotron-embedding-ms nemotron-ranking-ms
 ```
 
 The expected timeline for Docker (Self-Hosted) deployment is the following:
@@ -99,7 +99,7 @@ After starting your ingestion containers, verify these core services are healthy
 **Required Core Services:**
 - `ingestor-server` (Port 8082) - Main ingestion API
 - `nv-ingest-ms-runtime` (Port 7670) - Document processing engine
-- `milvus` (Port 19530) - Vector database
+- `elasticsearch` (Port 9200) - Vector database
 - `redis` (Port 6379) - Task queue
 
 ### 2. Verify Container Status After Deployment
@@ -109,7 +109,7 @@ After starting your ingestion containers, verify these core services are healthy
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
 # Check specifically for ingestion-related containers
-docker ps | grep -E "(ingestor-server|nv-ingest|nemoretriever-embedding|milvus|redis)"
+docker ps | grep -E "(ingestor-server|nv-ingest|nemoretriever-embedding|elasticsearch|redis)"
 ```
 
    *Example Output*
@@ -121,15 +121,14 @@ docker ps | grep -E "(ingestor-server|nv-ingest|nemoretriever-embedding|milvus|r
    compose-redis-1                         Up 5 minutes
    rag-frontend                            Up 9 minutes
    rag-server                              Up 9 minutes
-   milvus-standalone                       Up 36 minutes (healthy)
-   milvus-minio                            Up 35 minutes (healthy)
-   milvus-etcd                             Up 35 minutes (healthy)
-   nemoretriever-ranking-ms                Up 38 minutes (healthy)
+   elasticsearch                           Up 36 minutes (healthy)
+   seaweedfs                               Up 35 minutes (healthy)
+   nemotron-ranking-ms                Up 38 minutes (healthy)
    compose-page-elements-1                 Up 38 minutes
-   compose-nemoretriever-ocr-1             Up 38 minutes
+   compose-nemotron-ocr-1             Up 38 minutes
    compose-graphic-elements-1              Up 38 minutes
    compose-table-structure-1               Up 38 minutes
-   nemoretriever-embedding-ms              Up 38 minutes (healthy)
+   nemotron-embedding-ms              Up 38 minutes (healthy)
    nim-llm-ms                              Up 38 minutes (healthy)
    ```
 
@@ -141,7 +140,7 @@ docker ps | grep -E "(ingestor-server|nv-ingest|nemoretriever-embedding|milvus|r
 # Check ingestor server health with all dependencies
 curl -X GET "http://localhost:8082/v1/health?check_dependencies=true" | jq
 
-# Verify NV-Ingest runtime is ready for processing
+# Verify NeMo Retriever Library runtime is ready for processing
 curl -X GET "http://localhost:7670/v1/health/ready"
 
 # Check embedding service is responding
@@ -172,7 +171,7 @@ After starting your RAG containers, verify these core services are healthy:
 
 **Required Core Services:**
 - `rag-server` (Port 8081) - Main RAG API orchestrator
-- `milvus` (Port 19530) - Vector database
+- `elasticsearch` (Port 9200) - Vector database
 
 ### 2. Test Retrieval Service Health
 
@@ -219,11 +218,11 @@ Start by examining the logs of key ingestion services to identify the specific e
 # Check ingestor server logs for API errors
 docker logs ingestor-server --tail 100
 
-# Check NV-Ingest runtime logs for processing errors
+# Check NeMo Retriever Library runtime logs for processing errors
 docker logs nv-ingest-ms-runtime --tail 100
 
 # Check embedding service logs for model issues
-docker logs nemoretriever-embedding-ms --tail 100
+docker logs nemotron-embedding-ms --tail 100
 ```
 
 ### 2. Common Ingestion Problems and Solutions
@@ -235,25 +234,25 @@ docker logs nemoretriever-embedding-ms --tail 100
 
 **Vector Database Connection Issues:**
 ```bash
-# Check Milvus connectivity
-curl -X GET "http://localhost:9091/healthz"
+# Check Elasticsearch cluster health
+curl -s "http://localhost:9200/_cluster/health?pretty"
 
-# Check Milvus logs for database errors
-docker logs milvus-standalone --tail 50
+# Check Elasticsearch logs for database errors
+docker logs elasticsearch --tail 50
 ```
 
 **Embedding Service Issues:**
 ```bash
 # Check embedding service logs
-docker logs nemoretriever-embedding-ms --tail 100
+docker logs nemotron-embedding-ms --tail 100
 
 # Verify GPU availability and memory
 nvidia-smi
 ```
 
-**NV-Ingest Processing Errors:**
+**NeMo Retriever Library Processing Errors:**
 ```bash
-# Check NV-Ingest logs for processing errors
+# Check NeMo Retriever Library logs for processing errors
 docker logs nv-ingest-ms-runtime --tail 200 | grep -i error
 
 # Check Redis connectivity for task queue
@@ -288,7 +287,7 @@ docker logs rag-server --tail 100
 docker logs nim-llm-ms --tail 100
 
 # Check ranking service logs for reranking errors
-docker logs nemoretriever-ranking-ms --tail 100
+docker logs nemotron-ranking-ms --tail 100
 ```
 
 ### 2. Common Retrieval Problems and Solutions
@@ -314,10 +313,11 @@ docker logs -f nim-llm-ms
 
 **Vector Search Issues:**
 
-Delete the existing volumes directory and retry.
+Wipe the `rag-vol-*` Docker named volumes and retry. This deletes all persisted state (vectors, object store, etcd, LanceDB, ingestor scratch) — see [Manage Persistent Data Volumes](troubleshooting.md#manage-persistent-data-volumes) for selective wipes if you only need to reset one service.
 
 ```bash
-sudo rm -rf deploy/compose/volumes
+docker compose -f deploy/compose/vectordb.yaml down
+docker volume ls -q --filter "name=^rag-vol-" | xargs -r docker volume rm
 ```
 
 ## How to Enable Advanced Debugging

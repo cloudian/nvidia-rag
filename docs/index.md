@@ -1,5 +1,6 @@
 <!--
-  SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+  SPDX-FileCopyrightText: Copyright (c) 2025, 2026
+   NVIDIA CORPORATION & AFFILIATES. All rights reserved.
   SPDX-License-Identifier: Apache-2.0
 -->
 # NVIDIA RAG Blueprint Documentation
@@ -51,6 +52,7 @@ For detailed requirements, refer to [Support Matrix](support-matrix.md).
 - [Deploy on Kubernetes with Helm](deploy-helm.md)
 - [Deploy on Kubernetes with Helm from the repository](deploy-helm-from-repo.md)
 - [Deploy on Kubernetes with Helm and MIG Support](mig-deployment.md)
+- [Deploy on OpenShift with Helm](deploy-helm-openshift.md)
 - [Deploy Retrieval-Only Mode](retrieval-only-deployment.md)
 
 
@@ -67,7 +69,9 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
 - Common configurations
 
     - [Best Practices for Common Settings](accuracy_perf.md)
+    - [Agentic RAG](agentic-rag.md)
     - [Change the LLM or Embedding Model](change-model.md)
+    - [Nemotron 3 Super Deployment](nemotron3-super-deployment.md)
     - [Customize LLM Parameters at Runtime](llm-params.md)
     - [Customize Prompts](prompt-customization.md)
     - [Model Profiles for Hardware Configurations](model-profiles.md)
@@ -81,9 +85,10 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
 - Data Ingestion & Processing
 
     - [Audio Ingestion Support](audio_ingestion.md)
+    - [Continuous Ingestion from Object Storage](continuous-ingestion-object-storage.md)
     - [Custom Metadata Support](custom-metadata.md)
     - [File System Access to Extraction Results](mount-ingestor-volume.md)
-    - [Multimodal Embedding Support (Early Access)](vlm-embed.md)
+    - [Multimodal Retriever: VLM Embedding & VLM Reranker](multimodal-retriever.md)
     - [OCR Configuration Guide](nemoretriever-ocr.md)
     - [Enhanced PDF Extraction](nemotron-parse-extraction.md)
     - [Text-Only Ingestion](text_only_ingest.md)
@@ -97,6 +102,7 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
     - [Change the Vector Database](change-vectordb.md)
     - [Hybrid Search](hybrid_search.md)
     - [Milvus Configuration](milvus-configuration.md)
+    - [Elasticsearch Configuration](elasticsearch-configuration.md)
     - [Query Decomposition](query_decomposition.md)
 
 
@@ -110,6 +116,9 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
 - Evaluation
 
     - [Evaluate Your NVIDIA RAG Blueprint System](evaluate.md)
+    - [RAG Accuracy Benchmarks](accuracy-benchmarks.md)
+    - [RAG Performance Benchmarks](perf-benchmarks.md)
+    - [Benchmark the Performance of Your RAG System](performance-benchmarking.md)
 
 - Governance
 
@@ -141,7 +150,7 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
 
 ## Blog Posts
 
-- [NVIDIA NeMo Retriever Delivers Accurate Multimodal PDF Data Extraction 15x Faster](https://developer.nvidia.com/blog/nvidia-nemo-retriever-delivers-accurate-multimodal-pdf-data-extraction-15x-faster/)
+- [NVIDIA NeMo Retriever Library Delivers Accurate Multimodal PDF Data Extraction 15x Faster](https://developer.nvidia.com/blog/nvidia-nemo-retriever-delivers-accurate-multimodal-pdf-data-extraction-15x-faster/)
 - [Finding the Best Chunking Strategy for Accurate AI Responses](https://developer.nvidia.com/blog/finding-the-best-chunking-strategy-for-accurate-ai-responses/)
 
 
@@ -181,6 +190,7 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
    Deploy on Kubernetes with Helm <deploy-helm.md>
    Deploy on Kubernetes with Helm from the repository <deploy-helm-from-repo.md>
    Deploy on Kubernetes with Helm and MIG Support <mig-deployment.md>
+   Deploy on OpenShift with Helm <deploy-helm-openshift.md>
    Deploy Retrieval-Only Mode <retrieval-only-deployment.md>
 ```
 
@@ -192,7 +202,9 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
    :hidden:
 
    Best Practices for Common Settings <accuracy_perf.md>
+   Agentic RAG <agentic-rag.md>
    Change the Model <change-model.md>
+   Nemotron 3 Super Deployment <nemotron3-super-deployment.md>
    Customize Parameters <llm-params.md>
    Customize Prompts <prompt-customization.md>
    Model Profiles <model-profiles.md>
@@ -211,13 +223,14 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
    :hidden:
 
    Audio Ingestion Support <audio_ingestion.md>
+   Continuous Ingestion from Object Storage <continuous-ingestion-object-storage.md>
    Custom metadata Support <custom-metadata.md>
    Data Catalog for Collections and Documents <data-catalog.md>
    File System Access to Results <mount-ingestor-volume.md>
-   Multimodal Embedding Support (Early Access) <vlm-embed.md>
+   Multimodal Retriever — VLM Embedding & VLM Reranker <multimodal-retriever.md>
    OCR Configuration Guide <nemoretriever-ocr.md>
    Enhanced PDF Extraction <nemotron-parse-extraction.md>
-   Standalone NV-Ingest <nv-ingest-standalone.md>
+   Standalone NeMo Retriever Library <nv-ingest-standalone.md>
    Text-Only Ingestion <text_only_ingest.md>
    MCP Server Usage <mcp.md>
 ```
@@ -232,6 +245,7 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
    Change the Vector Database <change-vectordb.md>
    Hybrid Search <hybrid_search.md>
    Milvus Configuration <milvus-configuration.md>
+   Elasticsearch Configuration <elasticsearch-configuration.md>
    Query Decomposition <query_decomposition.md>
 ```
 
@@ -255,6 +269,9 @@ After you deploy the RAG blueprint, you can customize it for your use cases.
    :hidden:
 
    Evaluate Your RAG System <evaluate.md>
+   RAG Accuracy Benchmarks <accuracy-benchmarks.md>
+   RAG Performance Benchmarks <perf-benchmarks.md>
+   Benchmark RAG Performance <performance-benchmarking.md>
 ```
 
 

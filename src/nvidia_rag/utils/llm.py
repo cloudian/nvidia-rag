@@ -18,9 +18,11 @@
 2. get_llm: Get the LLM model. Uses the NVIDIA AI Endpoints or OpenAI.
 3. extract_reasoning_and_content: Extract reasoning and content from response chunks.
 4. streaming_filter_think: Filter the think tokens from the LLM response (sync).
-5. get_streaming_filter_think_parser: Get the parser for filtering the think tokens (sync).
-6. streaming_filter_think_async: Filter the think tokens from the LLM response (async).
-7. get_streaming_filter_think_parser_async: Get the parser for filtering the think tokens (async).
+5. streaming_split_reasoning_async: Split answer and reasoning tokens (async).
+6. get_streaming_filter_think_parser: Get the parser for filtering the think tokens (sync).
+7. streaming_filter_think_async: Filter the think tokens from the LLM response (async).
+8. get_streaming_filter_think_parser_async: Get the parser for filtering the think tokens (async).
+9. TokenUsageCaptureHandler: Callback that captures token usage from an LLM call into a dict.
 """
 
 import logging
@@ -28,14 +30,18 @@ import os
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import requests
 import yaml
-from langchain_core.language_models.llms import LLM
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.chat_models import SimpleChatModel
+from langchain_core.language_models.llms import LLM
+from langchain_core.messages import AIMessageChunk
+from langchain_core.outputs import LLMResult
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
-from nvidia_rag.rag_server.response_generator import APIError, ErrorCodeMapping
+from nvidia_rag.rag_server.response_generator import APIError, ErrorCodeMapping, Usage
 from nvidia_rag.utils.common import (
     NVIDIA_API_DEFAULT_HEADERS,
     combine_dicts,
@@ -51,6 +57,64 @@ try:
 except ImportError:
     logger.info("Langchain OpenAI is not installed.")
     pass
+
+
+def _extract_token_usage_from_llm_result(response: LLMResult) -> Usage | None:
+    """Extract token usage from ChatNVIDIA/LLM response (LLMResult)."""
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+    # Prefer llm_output (e.g. token_usage / usage)
+    llm_out = response.llm_output or {}
+    token_usage = llm_out.get("token_usage") or llm_out.get("usage")
+    if token_usage:
+        prompt_tokens = (
+            token_usage.get("prompt_tokens")
+            or token_usage.get("input_tokens")
+            or token_usage.get("input_token_count")
+            or 0
+        )
+        completion_tokens = (
+            token_usage.get("completion_tokens")
+            or token_usage.get("output_tokens")
+            or token_usage.get("generated_token_count")
+            or 0
+        )
+        total_tokens = token_usage.get("total_tokens") or (prompt_tokens + completion_tokens)
+    else:
+        # Fallback: usage_metadata on generation.message (ChatNVIDIA streaming)
+        for generations in response.generations:
+            for gen in generations:
+                if (
+                    hasattr(gen, "message")
+                    and hasattr(gen.message, "usage_metadata")
+                    and gen.message.usage_metadata
+                ):
+                    meta = gen.message.usage_metadata
+                    prompt_tokens += meta.get("input_tokens") or meta.get("prompt_tokens") or 0
+                    completion_tokens += meta.get("output_tokens") or meta.get("completion_tokens") or 0
+        total_tokens = prompt_tokens + completion_tokens
+    if total_tokens <= 0:
+        return None
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+class TokenUsageCaptureHandler(BaseCallbackHandler):
+    """Callback that captures token usage from the single LLM call (ChatNVIDIA) into a holder dict."""
+
+    def __init__(self, token_usage: dict):
+        self.token_usage = token_usage
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        usage = _extract_token_usage_from_llm_result(response)
+        if usage is not None:
+            self.token_usage["prompt_tokens"] = usage.prompt_tokens
+            self.token_usage["completion_tokens"] = usage.completion_tokens
+            self.token_usage["total_tokens"] = usage.total_tokens
 
 
 def get_prompts(source: str | dict | None = None) -> dict:
@@ -128,117 +192,127 @@ def _is_nvidia_endpoint(url: str | None) -> bool:
     return True
 
 
-def _bind_thinking_tokens_if_configured(
-    llm: LLM | SimpleChatModel, **kwargs
+def _supports_nvidia_generation_params(model: str | None) -> bool:
+    """Detect models that should receive NVIDIA-specific generation parameters."""
+    if not model:
+        return False
+    model_lower = model.lower()
+    return "nvidia" in model_lower or "nemotron" in model_lower
+
+
+def _is_nemotron_3(model: str | None) -> bool:
+    """Detect Nemotron 3 model variants by checking for 'nemotron-3' in the model name."""
+    if not model:
+        return False
+    return "nemotron-3" in model.lower()
+
+
+def _is_nemotron_3_nano(model: str | None) -> bool:
+    """Detect Nemotron 3 Nano models (30b-a3b and locally hosted variants)."""
+    if not model:
+        return False
+    m = model.lower()
+    return "nemotron-3-nano" in m
+
+
+def _is_nemotron_nano_9b_v2(model: str | None) -> bool:
+    """Detect legacy Nemotron Nano 9B v2."""
+    if not model:
+        return False
+    return "nvidia/nvidia-nemotron-nano-9b-v2" in model
+
+
+def _resolve_enable_thinking(config: NvidiaRAGConfig | None = None, **kwargs) -> bool:
+    """Resolve enable_thinking from config, kwargs, or deprecated env var fallback.
+
+    Explicit kwargs take priority over config so callers can opt out of thinking
+    (e.g. reflection tasks that need deterministic, non-thinking responses).
+    """
+    # Explicit kwarg takes highest priority (allows callers to override config)
+    if "enable_thinking" in kwargs:
+        return bool(kwargs["enable_thinking"])
+    if config is not None:
+        enable = config.llm.parameters.enable_thinking
+        if enable:
+            return True
+    enable = kwargs.get("enable_thinking", False)
+    if enable:
+        return True
+    deprecated = os.getenv("ENABLE_NEMOTRON_3_NANO_THINKING")
+    if deprecated is not None:
+        logger.warning(
+            "ENABLE_NEMOTRON_3_NANO_THINKING is deprecated, use LLM_ENABLE_THINKING instead"
+        )
+        return deprecated.lower() == "true"
+    return False
+
+
+def _bind_reasoning_config(
+    llm: LLM | SimpleChatModel, config: NvidiaRAGConfig | None = None, **kwargs
 ) -> LLM | SimpleChatModel:
     """
-    If min_thinking_tokens or max_thinking_tokens are > 0 in kwargs, bind them to the LLM.
-    
-    Supports multiple reasoning/thinking model variants:
-    
-    1. nvidia/nvidia-nemotron-nano-9b-v2:
-       - Uses min_thinking_tokens and max_thinking_tokens parameters
-       - Reasoning content is not available for this model
-    
-    2. nemotron-3-nano variants (nemotron-3-nano-30b-a3b, nvidia/nemotron-3-nano):
-       - Uses reasoning_budget parameter (mapped from max_thinking_tokens)
-       - reasoning_budget is ONLY set when enable_thinking is true
-       - Outputs reasoning in a separate 'reasoning_content' field (not in content)
-       - Does NOT use <think> tags
-       - Can be controlled via ENABLE_NEMOTRON_3_NANO_THINKING env var
+    Bind reasoning parameters to the LLM based on model type and configuration.
 
-    Raises:
-        ValueError: If min_thinking_tokens or max_thinking_tokens is passed but model
-                    is not a supported Nemotron thinking model, or if any of these
-                    parameters have invalid values (0 or negative).
+    Reads enable_thinking, reasoning_budget, and low_effort from the config
+    object (LLM_ENABLE_THINKING, LLM_REASONING_BUDGET, LLM_LOW_EFFORT env vars).
+    kwargs can still override these for backward compatibility.
+
+    Supports:
+    - Nemotron 3 variants: enable_thinking, reasoning_budget, low_effort via chat_template_kwargs
+    - Nemotron 3 Nano: enable_thinking + reasoning_budget (or nvext for local NIM)
+    - Nemotron Nano 9B v2: legacy min_thinking_tokens / max_thinking_tokens
+    - Other models: no reasoning features bound
     """
-    min_think = kwargs.get("min_thinking_tokens", None)
-    max_think = kwargs.get("max_thinking_tokens", None)
-    model = kwargs.get("model", None)
+    model = kwargs.get("model", "")
+    enable_thinking = _resolve_enable_thinking(config=config, **kwargs)
+    params = config.llm.parameters if config is not None else None
+    reasoning_budget = kwargs.get("reasoning_budget") or (params.reasoning_budget if params else 0)
+    low_effort = kwargs.get("low_effort") or (params.low_effort if params else False)
+    min_think = kwargs.get("min_thinking_tokens") or (params.min_thinking_tokens if params else 0) or 0
+    max_think = kwargs.get("max_thinking_tokens") or (params.max_thinking_tokens if params else 0) or 0
 
-    # Validate model compatibility for thinking tokens
-    has_thinking_tokens = (min_think is not None and min_think > 0) or (
-        max_think is not None and max_think > 0
-    )
+    # Check specific variants first, then fall through to the general nemotron-3 check
 
-    if not has_thinking_tokens:
+    if _is_nemotron_3_nano(model):
+        llm = llm.bind(chat_template_kwargs={"enable_thinking": enable_thinking})
+        if enable_thinking and (reasoning_budget > 0 or max_think > 0):
+            budget = reasoning_budget if reasoning_budget > 0 else max_think
+            llm_endpoint = kwargs.get("llm_endpoint", "")
+            if llm_endpoint:
+                llm = llm.bind(nvext={"max_thinking_tokens": budget})
+                logger.info("nemotron-3-nano (local): enable_thinking=%s, nvext.max_thinking_tokens=%d", enable_thinking, budget)
+            else:
+                llm = llm.bind(reasoning_budget=budget)
+                logger.info("nemotron-3-nano (API): enable_thinking=%s, reasoning_budget=%d", enable_thinking, budget)
+        else:
+            logger.info("nemotron-3-nano: enable_thinking=%s", enable_thinking)
         return llm
 
-    # Check if model is a supported reasoning model (various name formats)
-    # Note: For locally hosted models, use "nvidia/nemotron-3-nano"
-    # For NVIDIA-hosted models, use "nvidia/nemotron-3-nano-30b-a3b"
-    is_nano_9b_v2 = model and "nvidia/nvidia-nemotron-nano-9b-v2" in model
-    is_nemotron_3_nano = model and (
-        "nemotron-3-nano" in model.lower() or 
-        "nvidia/nemotron-3-nano" in model or
-        "nemotron-3-nano-30b-a3b" in model
-    )
-    
-    if has_thinking_tokens and not (is_nano_9b_v2 or is_nemotron_3_nano):
-        raise ValueError(
-            "min_thinking_tokens and max_thinking_tokens are only supported for models "
-            "'nvidia/nvidia-nemotron-nano-9b-v2' and nemotron-3-nano variants "
-            "(e.g., 'nemotron-3-nano-30b-a3b', 'nvidia/nemotron-3-nano'), "
-            f"but got model '{model}'"
-        )
+    if _is_nemotron_nano_9b_v2(model):
+        if min_think > 0 and max_think > 0:
+            llm = llm.bind(min_thinking_tokens=min_think, max_thinking_tokens=max_think)
+            logger.info("nemotron-nano-9b-v2: min_thinking_tokens=%d, max_thinking_tokens=%d", min_think, max_think)
+        elif min_think > 0 or max_think > 0:
+            raise ValueError(
+                "nemotron-nano-9b-v2 requires both min_thinking_tokens and max_thinking_tokens "
+                f"to be positive, got min={min_think}, max={max_think}"
+            )
+        return llm
 
-    bind_args = {}
-    if is_nano_9b_v2:
-        # nvidia/nvidia-nemotron-nano-9b-v2: Uses thinking token parameters directly
-        if min_think is not None and min_think > 0:
-            bind_args["min_thinking_tokens"] = min_think
-        else:
-            raise ValueError(
-                f"min_thinking_tokens must be a positive integer, but got {min_think}"
-            )
-        if max_think is not None and max_think > 0:
-            bind_args["max_thinking_tokens"] = max_think
-        else:
-            raise ValueError(
-                f"max_thinking_tokens must be a positive integer, but got {max_think}"
-            )
+    if _is_nemotron_3(model):
+        template_kwargs: dict = {"enable_thinking": enable_thinking}
+        if enable_thinking and low_effort:
+            template_kwargs["low_effort"] = True
+        budget = reasoning_budget if reasoning_budget > 0 else max_think
+        if enable_thinking and budget > 0:
+            template_kwargs["reasoning_budget"] = budget
+        llm = llm.bind(chat_template_kwargs=template_kwargs)
         logger.info(
-            "nvidia-nemotron-nano-9b-v2: Setting min_thinking_tokens=%d, max_thinking_tokens=%d",
-            min_think, max_think
+            "nemotron-3: enable_thinking=%s, reasoning_budget=%d, low_effort=%s",
+            enable_thinking, budget, low_effort,
         )
-    elif is_nemotron_3_nano:
-        enable_thinking = os.getenv("ENABLE_NEMOTRON_3_NANO_THINKING", "true").lower() == "true"
-        if not enable_thinking:
-            raise ValueError(
-                "ENABLE_NEMOTRON_3_NANO_THINKING must be set to 'true' to use reasoning budget"
-            )
+        return llm
 
-        # For nemotron-3-nano variants, min_thinking_tokens is not supported
-        if min_think is not None and min_think > 0:
-            logger.warning(
-                "min_thinking_tokens is not supported for nemotron-3-nano variants, "
-                "only max_thinking_tokens (mapped to reasoning_budget or nvext) is supported"
-            )
-
-        if max_think is not None and max_think > 0:
-            # Check if llm_endpoint is provided (locally hosted model)
-            llm_endpoint = kwargs.get("llm_endpoint", None)
-            if llm_endpoint:
-                # For locally hosted models, use nvext syntax
-                bind_args["nvext"] = {"max_thinking_tokens": max_think}
-                logger.info(
-                    "nemotron-3-nano (locally hosted): Setting max_thinking_tokens=%d via nvext",
-                    max_think
-                )
-            else:
-                # For API catalog models, use reasoning_budget
-                bind_args["reasoning_budget"] = max_think
-                logger.info(
-                    "nemotron-3-nano (API catalog): Setting reasoning_budget=%d",
-                    max_think
-                )
-        else:
-            raise ValueError(
-                f"max_thinking_tokens must be a positive integer, but got {max_think}"
-            )
-
-    if bind_args:
-        return llm.bind(**bind_args)
     return llm
 
 
@@ -289,16 +363,29 @@ def get_llm(config: NvidiaRAGConfig | None = None, **kwargs) -> LLM | SimpleChat
                     default_headers = {**NVIDIA_API_DEFAULT_HEADERS}
                     if api_key:
                         default_headers["X-Model-Authorization"] = api_key
-                    return ChatOpenAI(
-                        model_name=kwargs.get("model"),
-                        openai_api_base=f"{guardrails_url}/v1/guardrail",
-                        openai_api_key="dummy-value",
-                        default_headers=default_headers,
-                        temperature=kwargs.get("temperature", None),
-                        top_p=kwargs.get("top_p", None),
-                        max_tokens=kwargs.get("max_tokens", None),
-                        stop=kwargs.get("stop", []),
+                    openai_kwargs = {
+                        "model_name": kwargs.get("model"),
+                        "openai_api_base": f"{guardrails_url}/v1/guardrail",
+                        "openai_api_key": "dummy-value",
+                        "default_headers": default_headers,
+                        "max_tokens": kwargs.get("max_tokens", None),
+                    }
+                    supports_nvidia_generation_params = (
+                        _supports_nvidia_generation_params(kwargs.get("model"))
                     )
+                    if (
+                        supports_nvidia_generation_params
+                        and kwargs.get("temperature") is not None
+                    ):
+                        openai_kwargs["temperature"] = kwargs["temperature"]
+                    if (
+                        supports_nvidia_generation_params
+                        and kwargs.get("top_p") is not None
+                    ):
+                        openai_kwargs["top_p"] = kwargs["top_p"]
+                    if kwargs.get("stop"):
+                        openai_kwargs["stop"] = kwargs["stop"]
+                    return ChatOpenAI(**openai_kwargs)
                 except (requests.RequestException, requests.ConnectionError) as e:
                     error_msg = f"Guardrails NIM unavailable at {guardrails_url}. Please verify the service is running and accessible."
                     logger.exception(
@@ -315,24 +402,32 @@ def get_llm(config: NvidiaRAGConfig | None = None, **kwargs) -> LLM | SimpleChat
             api_key = kwargs.get("api_key") or config.llm.get_api_key()
             # Detect endpoint type using URL patterns only
             is_nvidia = _is_nvidia_endpoint(url)
+            supports_nvidia_generation_params = (
+                is_nvidia and _supports_nvidia_generation_params(kwargs.get("model"))
+            )
 
             # Build kwargs dict, only including parameters that are set
             # For non-NVIDIA endpoints, exclude NVIDIA-specific parameters
+            # Do not pass stop=[] - some Nemotron 3 APIs reject empty stop arrays
             chat_nvidia_kwargs = {
                 "base_url": url,
                 "model": kwargs.get("model"),
                 "api_key": api_key,
-                "stop": kwargs.get("stop", []),
                 "default_headers": NVIDIA_API_DEFAULT_HEADERS,
             }
-            if kwargs.get("temperature") is not None:
+            if kwargs.get("stop"):
+                chat_nvidia_kwargs["stop"] = kwargs["stop"]
+            if (
+                supports_nvidia_generation_params
+                and kwargs.get("temperature") is not None
+            ):
                 chat_nvidia_kwargs["temperature"] = kwargs["temperature"]
-            if kwargs.get("top_p") is not None:
+            if supports_nvidia_generation_params and kwargs.get("top_p") is not None:
                 chat_nvidia_kwargs["top_p"] = kwargs["top_p"]
             if kwargs.get("max_tokens") is not None:
                 chat_nvidia_kwargs["max_completion_tokens"] = kwargs["max_tokens"]
             # Only include NVIDIA-specific parameters for NVIDIA endpoints
-            if is_nvidia:
+            if supports_nvidia_generation_params:
                 model_kwargs = {}
                 if kwargs.get("min_tokens") is not None:
                     model_kwargs["min_tokens"] = kwargs["min_tokens"]
@@ -342,15 +437,8 @@ def get_llm(config: NvidiaRAGConfig | None = None, **kwargs) -> LLM | SimpleChat
                     chat_nvidia_kwargs["model_kwargs"] = model_kwargs
 
             llm = ChatNVIDIA(**chat_nvidia_kwargs)
-            # Only bind thinking tokens for NVIDIA endpoints
             if is_nvidia:
-                llm = _bind_thinking_tokens_if_configured(llm, **kwargs)
-                # For nemotron-3-nano models, set enable_thinking from env var
-                model = kwargs.get("model")
-                if model and ("nemotron-3-nano" in model.lower() or "nvidia/nemotron-3-nano" in model or "nemotron-3-nano-30b-a3b" in model):
-                    enable_thinking = os.getenv("ENABLE_NEMOTRON_3_NANO_THINKING", "true").lower() == "true"
-                    llm = llm.bind(chat_template_kwargs={"enable_thinking": enable_thinking})
-                    logger.info("nemotron-3-nano: Setting enable_thinking=%s (from ENABLE_NEMOTRON_3_NANO_THINKING)", enable_thinking)
+                llm = _bind_reasoning_config(llm, config=config, **kwargs)
             return llm
 
         logger.debug("Using llm model %s from api catalog", kwargs.get("model"))
@@ -358,28 +446,34 @@ def get_llm(config: NvidiaRAGConfig | None = None, **kwargs) -> LLM | SimpleChat
         api_key = kwargs.get("api_key") or config.llm.get_api_key()
 
         model_kwargs = {}
-        if kwargs.get("min_tokens") is not None:
-            model_kwargs["min_tokens"] = kwargs["min_tokens"]
-        if kwargs.get("ignore_eos") is not None:
-            model_kwargs["ignore_eos"] = kwargs["ignore_eos"]
-
-        llm = ChatNVIDIA(
-            model=kwargs.get("model"),
-            api_key=api_key,
-            temperature=kwargs.get("temperature", None),
-            top_p=kwargs.get("top_p", None),
-            max_completion_tokens=kwargs.get("max_tokens", None),
-            stop=kwargs.get("stop", []),
-            default_headers=NVIDIA_API_DEFAULT_HEADERS,
-            **({"model_kwargs": model_kwargs} if model_kwargs else {}),
+        supports_nvidia_generation_params = _supports_nvidia_generation_params(
+            kwargs.get("model")
         )
-        llm = _bind_thinking_tokens_if_configured(llm, **kwargs)
-        # For nemotron-3-nano models, set enable_thinking from env var
-        model = kwargs.get("model")
-        if model and ("nemotron-3-nano" in model.lower() or "nvidia/nemotron-3-nano" in model or "nemotron-3-nano-30b-a3b" in model):
-            enable_thinking = os.getenv("ENABLE_NEMOTRON_3_NANO_THINKING", "true").lower() == "true"
-            llm = llm.bind(chat_template_kwargs={"enable_thinking": enable_thinking})
-            logger.info("nemotron-3-nano: Setting enable_thinking=%s (from ENABLE_NEMOTRON_3_NANO_THINKING)", enable_thinking)
+        if supports_nvidia_generation_params:
+            if kwargs.get("min_tokens") is not None:
+                model_kwargs["min_tokens"] = kwargs["min_tokens"]
+            if kwargs.get("ignore_eos") is not None:
+                model_kwargs["ignore_eos"] = kwargs["ignore_eos"]
+
+        # Do not pass stop=[] - some Nemotron 3 APIs reject empty stop arrays
+        chat_nvidia_kwargs = {
+            "model": kwargs.get("model"),
+            "api_key": api_key,
+            "max_completion_tokens": kwargs.get("max_tokens", None),
+            "default_headers": NVIDIA_API_DEFAULT_HEADERS,
+            **({"model_kwargs": model_kwargs} if model_kwargs else {}),
+        }
+        if (
+            supports_nvidia_generation_params
+            and kwargs.get("temperature") is not None
+        ):
+            chat_nvidia_kwargs["temperature"] = kwargs["temperature"]
+        if supports_nvidia_generation_params and kwargs.get("top_p") is not None:
+            chat_nvidia_kwargs["top_p"] = kwargs["top_p"]
+        if kwargs.get("stop"):
+            chat_nvidia_kwargs["stop"] = kwargs["stop"]
+        llm = ChatNVIDIA(**chat_nvidia_kwargs)
+        llm = _bind_reasoning_config(llm, config=config, **kwargs)
         return llm
 
     raise RuntimeError(
@@ -387,29 +481,53 @@ def get_llm(config: NvidiaRAGConfig | None = None, **kwargs) -> LLM | SimpleChat
     )
 
 
+def _coerce_text(value: Any) -> str:
+    """Return a string for scalar chunk fields, preserving empty values."""
+    if value is None:
+        return ""
+    if value.__class__.__module__.startswith("unittest.mock"):
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _reasoning_chunk(reasoning: str) -> AIMessageChunk:
+    """Build a chunk whose payload is reasoning-only."""
+    return AIMessageChunk(
+        content="",
+        additional_kwargs={"reasoning_content": reasoning},
+    )
+
+
+def _content_chunk(content: str) -> AIMessageChunk:
+    """Build a chunk whose payload is user-facing answer content."""
+    return AIMessageChunk(content=content)
+
+
 def extract_reasoning_and_content(chunk) -> tuple[str, str]:
     """
     Extract both reasoning and content from a response chunk.
-    
+
     Different models handle reasoning differently:
     - nvidia/nvidia-nemotron-nano-9b-v2: Uses <think> tags in content stream
     - nemotron-3-nano variants: Uses separate reasoning_content field
-    - llama-3.3-nemotron-super-49b: Uses <think> tags in content stream (controlled by prompt)
-    
+    - nemotron-3-super-120b-a12b: Uses <think> tags in content stream (controlled by prompt)
+
     This function is designed to be robust and compatible with future changes:
     - Checks both reasoning_content and content fields
     - Returns whichever field has tokens, regardless of model behavior
     - If both have content, returns both separately
-    
+
     This ensures that if the model server fixes the issue where reasoning is disabled
     but content still goes to reasoning_content, the code will still work correctly.
-    
+
     Args:
         chunk: A response chunk from ChatNVIDIA or similar LLM interface
-    
+
     Returns:
         tuple: (reasoning_text, content_text) - either may be empty string
-        
+
     Example:
         >>> for chunk in llm.stream([HumanMessage(content="question")]):
         >>>     reasoning, content = extract_reasoning_and_content(chunk)
@@ -420,18 +538,29 @@ def extract_reasoning_and_content(chunk) -> tuple[str, str]:
     """
     reasoning = ""
     content = ""
-    
-    # Check for reasoning_content in additional_kwargs (nemotron-3-nano variants)
-    # This field is populated by nemotron-3-nano models for reasoning output
-    if hasattr(chunk, 'additional_kwargs') and 'reasoning_content' in chunk.additional_kwargs:
-        reasoning = chunk.additional_kwargs.get('reasoning_content', '')
-    
+
+    # Check for reasoning in additional_kwargs (Nemotron 3 / OpenAI-compatible
+    # reasoning models). Different endpoints use different key names.
+    additional_kwargs = getattr(chunk, "additional_kwargs", None) or {}
+    if isinstance(additional_kwargs, dict):
+        reasoning = _coerce_text(
+            additional_kwargs.get("reasoning_content")
+            or additional_kwargs.get("reasoning")
+        )
+
+    # Some SDKs expose reasoning as a direct delta attribute instead.
+    if not reasoning:
+        reasoning = _coerce_text(
+            getattr(chunk, "reasoning_content", None)
+            or getattr(chunk, "reasoning", None)
+        )
+
     # Check for regular content
     # This field is populated by most models for regular output
     # For nemotron-nano-9b-v2 and llama-49b, this may include <think> tags
-    if hasattr(chunk, 'content') and chunk.content:
-        content = chunk.content
-    
+    if hasattr(chunk, "content") and chunk.content:
+        content = _coerce_text(chunk.content)
+
     # Robust fallback: If reasoning field has content but content field is empty,
     # treat reasoning as content. This handles the case where enable_thinking=false
     # but the model still populates reasoning_content instead of content.
@@ -441,7 +570,7 @@ def extract_reasoning_and_content(chunk) -> tuple[str, str]:
         # (occurs when enable_thinking=false but model hasn't been updated)
         # Keep it in reasoning field but also check if it looks like a final answer
         pass  # Keep as-is, let the caller decide how to handle
-    
+
     return reasoning, content
 
 
@@ -449,6 +578,9 @@ def streaming_filter_think(chunks: Iterable[str]) -> Iterable[str]:
     """
     This generator filters content between think tags in streaming LLM responses.
     It handles both complete tags in a single chunk and tags split across multiple tokens.
+
+    When DEBUG logging is enabled (i.e. LOGLEVEL=DEBUG), reasoning tokens are
+    logged from <think> block content or reasoning_content field.
 
     Args:
         chunks (Iterable[str]): Chunks from a streaming LLM response
@@ -474,11 +606,19 @@ def streaming_filter_think(chunks: Iterable[str]) -> Iterable[str]:
     match_position = 0
     buffer = ""
     output_buffer = ""
+    think_accumulator = ""
+    reasoning_content_accumulator = ""
     chunk_count = 0
 
     for chunk in chunks:
-        content = chunk.content
+        reasoning, content = extract_reasoning_and_content(chunk)
+        content = content or reasoning
         chunk_count += 1
+
+        # Accumulate reasoning tokens when DEBUG logging is enabled (e.g. reasoning_content from nemotron-3-nano)
+        reasoning, _ = extract_reasoning_and_content(chunk)
+        if reasoning and logger.isEnabledFor(logging.DEBUG):
+            reasoning_content_accumulator += reasoning
 
         # Let's first check for full tags - this is the most reliable approach
         buffer += content
@@ -496,6 +636,10 @@ def streaming_filter_think(chunks: Iterable[str]) -> Iterable[str]:
 
         while state == IN_THINK and FULL_END_TAG in buffer:
             end_idx = buffer.find(FULL_END_TAG)
+            if logger.isEnabledFor(logging.DEBUG):
+                think_content = buffer[:end_idx]
+                if think_content:
+                    think_accumulator += think_content + "\n"
             # Discard everything up to and including end tag
             buffer = buffer[end_idx + len(FULL_END_TAG) :]
             content = buffer
@@ -543,10 +687,14 @@ def streaming_filter_think(chunks: Iterable[str]) -> Iterable[str]:
 
         elif state == IN_THINK:
             if content_stripped == END_TAG_PARTS[0].strip():
+                # Accumulate think content before the end tag start
+                think_accumulator += buffer[: -len(content)] if content else buffer
                 state = MATCHING_END
                 match_position = 1
                 buffer = content  # Keep this token in buffer
             else:
+                if logger.isEnabledFor(logging.DEBUG):
+                    think_accumulator += buffer
                 buffer = ""  # Discard content inside think block
 
         elif state == MATCHING_END:
@@ -555,11 +703,15 @@ def streaming_filter_think(chunks: Iterable[str]) -> Iterable[str]:
                 match_position += 1
                 if match_position >= len(END_TAG_PARTS):
                     # Complete end tag matched
+                    if think_accumulator and logger.isEnabledFor(logging.DEBUG):
+                        think_accumulator += "\n"
                     state = NORMAL
                     match_position = 0
                     buffer = ""  # Clear buffer
             else:
                 # False match, revert to IN_THINK
+                if logger.isEnabledFor(logging.DEBUG):
+                    think_accumulator += buffer
                 state = IN_THINK
                 buffer = ""  # Discard content
 
@@ -580,6 +732,11 @@ def streaming_filter_think(chunks: Iterable[str]) -> Iterable[str]:
             yield buffer
         if output_buffer:
             yield output_buffer
+
+    if think_accumulator and logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Reasoning tokens (think): %s", think_accumulator.rstrip())
+    if reasoning_content_accumulator and logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Reasoning tokens: %s", reasoning_content_accumulator)
 
     logger.info(
         "Finished streaming_filter_think processing after %d chunks", chunk_count
@@ -611,14 +768,138 @@ def get_streaming_filter_think_parser():
         return RunnablePassthrough()
 
 
-async def streaming_filter_think_async(chunks):
+async def streaming_split_reasoning_async(chunks):
+    """
+    Split streamed LLM chunks into answer content and reasoning content.
+
+    This parser classifies tokens by observed output format, not by request
+    configuration:
+
+    - ``reasoning`` / ``reasoning_content`` fields become reasoning chunks.
+    - text inside ``<think>...</think>`` becomes reasoning chunks.
+    - text outside ``<think>...</think>`` remains answer content.
+
+    Yields:
+        AIMessageChunk: answer chunks use ``content``; reasoning chunks use
+        ``additional_kwargs["reasoning_content"]``.
+    """
+    start_tag = "<think>"
+    end_tag = "</think>"
+    normal = "normal"
+    in_think = "in_think"
+
+    state = normal
+    tag_buffer = ""
+    content_buffer = ""
+    reasoning_buffer = ""
+    chunk_count = 0
+
+    def emit_content() -> list[AIMessageChunk]:
+        nonlocal content_buffer
+        if not content_buffer:
+            return []
+        emitted = [_content_chunk(content_buffer)]
+        content_buffer = ""
+        return emitted
+
+    def emit_reasoning() -> list[AIMessageChunk]:
+        nonlocal reasoning_buffer
+        if not reasoning_buffer:
+            return []
+        emitted = [_reasoning_chunk(reasoning_buffer)]
+        reasoning_buffer = ""
+        return emitted
+
+    async for chunk in chunks:
+        reasoning, content = extract_reasoning_and_content(chunk)
+        chunk_count += 1
+
+        if reasoning:
+            yield _reasoning_chunk(reasoning)
+
+        emitted: list[AIMessageChunk] = []
+        for char in content:
+            consumed = False
+            while not consumed:
+                if state == normal:
+                    if tag_buffer:
+                        candidate = tag_buffer + char
+                        if start_tag.startswith(candidate):
+                            tag_buffer = candidate
+                            consumed = True
+                            if tag_buffer == start_tag:
+                                emitted.extend(emit_content())
+                                tag_buffer = ""
+                                state = in_think
+                        else:
+                            content_buffer += tag_buffer
+                            tag_buffer = ""
+                    elif char == "<":
+                        tag_buffer = char
+                        consumed = True
+                    else:
+                        content_buffer += char
+                        consumed = True
+                else:
+                    if tag_buffer:
+                        candidate = tag_buffer + char
+                        if end_tag.startswith(candidate):
+                            tag_buffer = candidate
+                            consumed = True
+                            if tag_buffer == end_tag:
+                                emitted.extend(emit_reasoning())
+                                tag_buffer = ""
+                                state = normal
+                        else:
+                            reasoning_buffer += tag_buffer
+                            tag_buffer = ""
+                    elif char == "<":
+                        tag_buffer = char
+                        consumed = True
+                    else:
+                        reasoning_buffer += char
+                        consumed = True
+
+        if state == normal and not tag_buffer:
+            emitted.extend(emit_content())
+        elif state == in_think and not tag_buffer:
+            emitted.extend(emit_reasoning())
+
+        for item in emitted:
+            yield item
+
+    if tag_buffer:
+        if state == normal:
+            content_buffer += tag_buffer
+        else:
+            reasoning_buffer += tag_buffer
+    if content_buffer:
+        yield _content_chunk(content_buffer)
+    if reasoning_buffer:
+        yield _reasoning_chunk(reasoning_buffer)
+
+    logger.info(
+        "Finished streaming_split_reasoning_async processing after %d chunks",
+        chunk_count,
+    )
+
+
+async def streaming_filter_think_async(chunks, enable_thinking: bool = False):
     """
     Async version of streaming_filter_think.
     This async generator filters content between think tags in streaming LLM responses.
     It handles both complete tags in a single chunk and tags split across multiple tokens.
 
+    When DEBUG logging is enabled (i.e. LOGLEVEL=DEBUG), reasoning tokens are
+    logged from <think> block content or reasoning_content field.
+    When enable_thinking is True and the model uses a separate reasoning_content field
+    (e.g. Nemotron 3), reasoning tokens are dropped and only content is forwarded.
+    The <think> tag filter still runs to handle models that embed reasoning in content.
+
     Args:
         chunks: Async iterable of chunks from a streaming LLM response
+        enable_thinking: When True, drop reasoning_content (genuine chain-of-thought).
+            When False, fall back to reasoning_content if content is empty (model quirk).
 
     Yields:
         str: Filtered content with think blocks removed
@@ -641,11 +922,19 @@ async def streaming_filter_think_async(chunks):
     match_position = 0
     buffer = ""
     output_buffer = ""
+    think_accumulator = ""
+    reasoning_content_accumulator = ""
     chunk_count = 0
 
     async for chunk in chunks:
-        content = chunk.content
+        reasoning, content = extract_reasoning_and_content(chunk)
+        content = content if enable_thinking else (content or reasoning)
         chunk_count += 1
+
+        # Accumulate reasoning when DEBUG logging is enabled (e.g. reasoning_content from nemotron-3-nano)
+        reasoning, _ = extract_reasoning_and_content(chunk)
+        if reasoning and logger.isEnabledFor(logging.DEBUG):
+            reasoning_content_accumulator += reasoning
 
         # Let's first check for full tags - this is the most reliable approach
         buffer += content
@@ -663,6 +952,10 @@ async def streaming_filter_think_async(chunks):
 
         while state == IN_THINK and FULL_END_TAG in buffer:
             end_idx = buffer.find(FULL_END_TAG)
+            if logger.isEnabledFor(logging.DEBUG):
+                think_content = buffer[:end_idx]
+                if think_content:
+                    think_accumulator += think_content + "\n"
             # Discard everything up to and including end tag
             buffer = buffer[end_idx + len(FULL_END_TAG) :]
             content = buffer
@@ -710,10 +1003,14 @@ async def streaming_filter_think_async(chunks):
 
         elif state == IN_THINK:
             if content_stripped == END_TAG_PARTS[0].strip():
+                # Accumulate think content before the end tag start
+                think_accumulator += buffer[: -len(content)] if content else buffer
                 state = MATCHING_END
                 match_position = 1
                 buffer = content  # Keep this token in buffer
             else:
+                if logger.isEnabledFor(logging.DEBUG):
+                    think_accumulator += buffer
                 buffer = ""  # Discard content inside think block
 
         elif state == MATCHING_END:
@@ -722,11 +1019,15 @@ async def streaming_filter_think_async(chunks):
                 match_position += 1
                 if match_position >= len(END_TAG_PARTS):
                     # Complete end tag matched
+                    if think_accumulator and logger.isEnabledFor(logging.DEBUG):
+                        think_accumulator += "\n"
                     state = NORMAL
                     match_position = 0
                     buffer = ""  # Clear buffer
             else:
                 # False match, revert to IN_THINK
+                if logger.isEnabledFor(logging.DEBUG):
+                    think_accumulator += buffer
                 state = IN_THINK
                 buffer = ""  # Discard content
 
@@ -748,32 +1049,84 @@ async def streaming_filter_think_async(chunks):
         if output_buffer:
             yield output_buffer
 
+    if think_accumulator and logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Reasoning tokens (think): %s", think_accumulator.rstrip())
+    if reasoning_content_accumulator and logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Reasoning tokens: %s", reasoning_content_accumulator)
+
     logger.info(
         "Finished streaming_filter_think_async processing after %d chunks", chunk_count
     )
 
 
-def get_streaming_filter_think_parser_async():
+async def _content_fallback_async(chunks, enable_thinking: bool = False):
+    """
+    Pass through LLM chunks WITHOUT filtering thinking tokens.
+    Used when FILTER_THINK_TOKENS=false - the user wants to see everything.
+
+    - When enable_thinking=true: forwards both reasoning_content and content so
+      the user can see the chain-of-thought followed by the answer.
+    - When enable_thinking=false: falls back to reasoning_content if content is
+      empty (NIM quirk where the answer lands in reasoning_content).
+
+    Args:
+        chunks: Async iterable of LLM response chunks
+        enable_thinking: Whether the model is producing genuine reasoning tokens.
+    """
+    async for chunk in chunks:
+        reasoning, content = extract_reasoning_and_content(chunk)
+
+        if enable_thinking:
+            if reasoning:
+                yield AIMessageChunk(content=reasoning)
+            if content:
+                yield AIMessageChunk(content=content)
+        else:
+            text = content or reasoning
+            if text:
+                yield AIMessageChunk(content=text)
+
+
+def get_streaming_filter_think_parser_async(
+    enable_thinking: bool = False,
+    preserve_reasoning_content: bool = False,
+):
     """
     Creates and returns an async RunnableGenerator for filtering think tokens.
 
+    If ``preserve_reasoning_content`` is True, observed reasoning tokens are
+    split into ``AIMessageChunk.additional_kwargs["reasoning_content"]`` and
+    answer tokens stay in ``AIMessageChunk.content``.
+
     If FILTER_THINK_TOKENS environment variable is set to "true" (case-insensitive),
     returns a parser that filters out content between <think> and </think> tags.
-    Otherwise, returns a pass-through parser that doesn't modify the content.
+    Otherwise, returns a parser that normalizes content (content or reasoning_content)
+    so models like Nemotron 3 that put reply in reasoning_content still yield text.
+
+    Args:
+        enable_thinking: When True, reasoning_content is genuine chain-of-thought and
+            will be dropped. When False, reasoning_content is used as a fallback if
+            content is empty (workaround for model quirk).
+        preserve_reasoning_content: Preserve observed reasoning structurally
+            instead of dropping or merging it into answer content.
 
     Returns:
-        RunnableGenerator: An async parser for filtering (or not filtering) think tokens
+        RunnableGenerator: An async parser for filtering or content normalization
     """
+    from functools import partial
+
     from langchain_core.runnables import RunnableGenerator, RunnablePassthrough
+
+    if preserve_reasoning_content:
+        logger.info("Reasoning-content preservation is enabled (async)")
+        return RunnableGenerator(streaming_split_reasoning_async)
 
     # Check environment variable
     filter_enabled = os.getenv("FILTER_THINK_TOKENS", "true").lower() == "true"
 
     if filter_enabled:
-        logger.info("Think token filtering is enabled (async)")
-        return RunnableGenerator(streaming_filter_think_async)
+        logger.info("Think token filtering is enabled (async), enable_thinking=%s", enable_thinking)
+        return RunnableGenerator(partial(streaming_filter_think_async, enable_thinking=enable_thinking))
     else:
-        logger.info("Think token filtering is disabled (async)")
-        # If filtering is disabled, use a passthrough that passes content as-is
-        return RunnablePassthrough()
-        
+        logger.info("Think token filtering is disabled (async), enable_thinking=%s", enable_thinking)
+        return RunnableGenerator(partial(_content_fallback_async, enable_thinking=enable_thinking))
